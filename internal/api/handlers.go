@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/Lithial/ManageBot/internal/intake"
@@ -35,7 +36,8 @@ func (s *Server) handleSubmitRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pid, err := s.findOrCreateProject(ctx, req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -44,7 +46,8 @@ func (s *Server) handleSubmitRun(w http.ResponseWriter, r *http.Request) {
 		// Pull the project's default gates.
 		p, err := s.store.ProjectByName(ctx, req.ProjectName)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("api: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
 		gates = p.DefaultGatesJSON
@@ -59,7 +62,8 @@ func (s *Server) handleSubmitRun(w http.ResponseWriter, r *http.Request) {
 		Phase:      "pending",
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 

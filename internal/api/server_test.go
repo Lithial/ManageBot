@@ -119,8 +119,14 @@ func TestSubmitRunReusesExistingProject(t *testing.T) {
 		t.Fatalf("first Post: %v", err)
 	}
 	defer resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp1.Body)
+		t.Fatalf("first request status = %d, body = %s", resp1.StatusCode, raw)
+	}
 	var out1 intake.SubmitRunResponse
-	_ = json.NewDecoder(resp1.Body).Decode(&out1)
+	if err := json.NewDecoder(resp1.Body).Decode(&out1); err != nil {
+		t.Fatalf("decode out1: %v", err)
+	}
 
 	body.SpecMD = "# second"
 	buf, _ = json.Marshal(body)
@@ -129,8 +135,14 @@ func TestSubmitRunReusesExistingProject(t *testing.T) {
 		t.Fatalf("second Post: %v", err)
 	}
 	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("second request status = %d, body = %s", resp2.StatusCode, raw)
+	}
 	var out2 intake.SubmitRunResponse
-	_ = json.NewDecoder(resp2.Body).Decode(&out2)
+	if err := json.NewDecoder(resp2.Body).Decode(&out2); err != nil {
+		t.Fatalf("decode out2: %v", err)
+	}
 
 	if out1.ProjectID != out2.ProjectID {
 		t.Errorf("project IDs differ: %q vs %q", out1.ProjectID, out2.ProjectID)

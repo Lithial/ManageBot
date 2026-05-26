@@ -41,6 +41,7 @@ func (s *Server) Serve() error {
 	// Restrict socket to the current user.
 	if err := os.Chmod(s.socketPath, 0o600); err != nil {
 		_ = l.Close()
+		_ = os.Remove(s.socketPath)
 		return err
 	}
 	s.listener = l
