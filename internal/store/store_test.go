@@ -11,7 +11,7 @@ import (
 func TestOpenAppliesSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "wrap.db")
 
-	s, err := store.Open(dbPath)
+	s, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -33,13 +33,13 @@ func TestOpenAppliesSchema(t *testing.T) {
 func TestOpenIsIdempotent(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "wrap.db")
 
-	s1, err := store.Open(dbPath)
+	s1, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
 	_ = s1.Close()
 
-	s2, err := store.Open(dbPath)
+	s2, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
 	}
