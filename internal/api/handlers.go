@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -79,20 +78,16 @@ func (s *Server) findOrCreateProject(ctx context.Context, req intake.SubmitRunRe
 	if err == nil {
 		return p.ID, nil
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	if !errors.Is(err, store.ErrNotFound) {
 		// Real DB error, not "row not found" — propagate.
 		return "", err
 	}
 	defaultGates := `{"plan":{"mode":"require_approval"},"worker_done":{"mode":"auto"},"merge":{"mode":"require_approval"},"custom":[]}`
-	verCmd := sql.NullString{}
-	if req.VerificationCommand != "" {
-		verCmd = sql.NullString{String: req.VerificationCommand, Valid: true}
-	}
 	return s.store.InsertProject(ctx, store.Project{
 		Name:                req.ProjectName,
 		RepoPath:            req.RepoPath,
 		DefaultGatesJSON:    defaultGates,
-		VerificationCommand: verCmd,
+		VerificationCommand: req.VerificationCommand,
 	})
 }
 

@@ -3,18 +3,22 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/Lithial/ManageBot/internal/ids"
 )
 
+// ErrNotFound is returned when a requested entity does not exist in the store.
+var ErrNotFound = errors.New("not found")
+
 type Project struct {
 	ID                  string
 	Name                string
 	RepoPath            string
 	DefaultGatesJSON    string
-	VerificationCommand sql.NullString
+	VerificationCommand string
 	CreatedAt           int64
 }
 
@@ -36,10 +40,14 @@ func (s *Store) InsertProject(ctx context.Context, p Project) (string, error) {
 		id = ids.New()
 	}
 	now := time.Now().Unix()
+	var verCmd sql.NullString
+	if p.VerificationCommand != "" {
+		verCmd = sql.NullString{String: p.VerificationCommand, Valid: true}
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO projects (id, name, repo_path, default_gates_json, verification_command, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)
-	`, id, p.Name, p.RepoPath, p.DefaultGatesJSON, p.VerificationCommand, now)
+	`, id, p.Name, p.RepoPath, p.DefaultGatesJSON, verCmd, now)
 	if err != nil {
 		return "", fmt.Errorf("insert project: %w", err)
 	}
@@ -72,6 +80,9 @@ func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
 		FROM runs WHERE id = ?
 	`, id).Scan(&r.ID, &r.ProjectID, &r.IntakeKind, &r.IntakeRef, &r.SpecMD, &r.GatesJSON, &r.Phase, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Run{}, fmt.Errorf("get run %q: %w", id, ErrNotFound)
+		}
 		return Run{}, fmt.Errorf("get run %q: %w", id, err)
 	}
 	return r, nil
@@ -79,12 +90,17 @@ func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
 
 func (s *Store) ProjectByName(ctx context.Context, name string) (Project, error) {
 	var p Project
+	var verCmd sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, name, repo_path, default_gates_json, verification_command, created_at
 		FROM projects WHERE name = ?
-	`, name).Scan(&p.ID, &p.Name, &p.RepoPath, &p.DefaultGatesJSON, &p.VerificationCommand, &p.CreatedAt)
+	`, name).Scan(&p.ID, &p.Name, &p.RepoPath, &p.DefaultGatesJSON, &verCmd, &p.CreatedAt)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Project{}, fmt.Errorf("project by name %q: %w", name, ErrNotFound)
+		}
 		return Project{}, fmt.Errorf("project by name %q: %w", name, err)
 	}
+	p.VerificationCommand = verCmd.String
 	return p, nil
 }
