@@ -54,9 +54,17 @@ func main() {
 	srv := api.NewServer(s, *socket)
 	errCh := make(chan error, 1)
 	go func() {
-		fmt.Printf("wrapd: listening on %s, state in %s\n", *socket, *stateDir)
 		errCh <- srv.Serve()
 	}()
+
+	select {
+	case <-srv.Ready():
+		fmt.Printf("wrapd: listening on %s, state in %s\n", *socket, *stateDir)
+	case err := <-errCh:
+		if err != nil {
+			log.Fatalf("serve: %v", err)
+		}
+	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

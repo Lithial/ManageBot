@@ -16,11 +16,11 @@ type Server struct {
 	store      *store.Store
 	socketPath string
 	httpSrv    *http.Server
-	listener   net.Listener
+	readyCh    chan struct{}
 }
 
 func NewServer(s *store.Store, socketPath string) *Server {
-	srv := &Server{store: s, socketPath: socketPath}
+	srv := &Server{store: s, socketPath: socketPath, readyCh: make(chan struct{})}
 	mux := http.NewServeMux()
 	srv.registerRoutes(mux)
 	srv.httpSrv = &http.Server{
@@ -29,6 +29,10 @@ func NewServer(s *store.Store, socketPath string) *Server {
 	}
 	return srv
 }
+
+// Ready returns a channel that is closed once the server's Unix socket is
+// bound and ready to accept connections.
+func (s *Server) Ready() <-chan struct{} { return s.readyCh }
 
 func (s *Server) Serve() error {
 	// Best-effort: remove a stale socket if one exists.
@@ -44,7 +48,7 @@ func (s *Server) Serve() error {
 		_ = os.Remove(s.socketPath)
 		return err
 	}
-	s.listener = l
+	close(s.readyCh)
 	if err := s.httpSrv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
