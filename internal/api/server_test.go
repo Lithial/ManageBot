@@ -7,43 +7,17 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/Lithial/ManageBot/internal/api"
 	"github.com/Lithial/ManageBot/internal/intake"
-	"github.com/Lithial/ManageBot/internal/store"
+	"github.com/Lithial/ManageBot/internal/testutil"
 )
 
 func readerOf(b []byte) *bytes.Reader { return bytes.NewReader(b) }
 
 func startServer(t *testing.T) (*http.Client, string) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "wrap.sock")
-	dbPath := filepath.Join(t.TempDir(), "wrap.db")
-
-	s, err := store.Open(context.Background(), dbPath)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	srv := api.NewServer(s, sock)
-	go func() {
-		_ = srv.Serve()
-	}()
-	t.Cleanup(func() { _ = srv.Close() })
-
-	// Wait for the socket to appear (up to 1s).
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := net.Dial("unix", sock); err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
+	sock := testutil.StartInProcessServer(t)
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
