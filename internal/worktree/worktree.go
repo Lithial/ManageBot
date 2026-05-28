@@ -45,6 +45,7 @@ func (m *Manager) Add(ctx context.Context, req AddRequest) (Worktree, error) {
 		return Worktree{}, fmt.Errorf("worktree.Add: RepoPath, Branch, BaseRef, Subpath are required")
 	}
 	wtPath := filepath.Join(m.stateDir, req.Subpath)
+	// Create only the parent — `git worktree add` creates wtPath itself.
 	if err := os.MkdirAll(filepath.Dir(wtPath), 0o700); err != nil {
 		return Worktree{}, fmt.Errorf("mkdir parent: %w", err)
 	}
@@ -57,9 +58,12 @@ func (m *Manager) Add(ctx context.Context, req AddRequest) (Worktree, error) {
 }
 
 // Remove runs `git worktree remove --force <path>` against the given repo.
-// Force is used because Phase 2 worktrees may have untracked planner output;
-// we always want the directory cleaned on success or kill paths. Branches
-// are NOT deleted here — Phase 6 `wrap prune` handles branch cleanup.
+// --force is required for Phase 2 because the planner writes untracked output
+// files. WARNING: --force also discards uncommitted *tracked* changes. Phase 3+
+// callers must ensure tracked changes are committed or intentionally abandoned
+// before calling Remove, or replace --force with a softer fallback path that
+// distinguishes dirty-tracked-changes from untracked-output cleanups.
+// Branches are NOT deleted here — Phase 6 `wrap prune` handles branch cleanup.
 func (m *Manager) Remove(ctx context.Context, repoPath, wtPath string) error {
 	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", "--force", wtPath)
 	cmd.Dir = repoPath
