@@ -52,9 +52,13 @@ func TestAdvanceTransitions(t *testing.T) {
 		{"kill from any non-terminal", fsm.PhasePlanning, fsm.EventKill, fsm.PhaseKilled, false},
 		{"kill from pending", fsm.PhasePending, fsm.EventKill, fsm.PhaseKilled, false},
 		{"invalid: done->planning", fsm.PhaseDone, fsm.EventPlanStart, "", true},
-		{"invalid: planning->done", fsm.PhasePlanning, fsm.EventPlanDone, fsm.PhasePlanGate, false}, // sanity: done is two hops away
+		{"sanity: planning+plan_done lands on plan_gate not done", fsm.PhasePlanning, fsm.EventPlanDone, fsm.PhasePlanGate, false},
 		{"invalid: pending->plan_gate", fsm.PhasePending, fsm.EventPlanDone, "", true},
 		{"invalid: kill from done", fsm.PhaseDone, fsm.EventKill, "", true},
+		{"kill from plan_gate", fsm.PhasePlanGate, fsm.EventKill, fsm.PhaseKilled, false},
+		{"kill from working", fsm.PhaseWorking, fsm.EventKill, fsm.PhaseKilled, false},
+		{"kill from merging", fsm.PhaseMerging, fsm.EventKill, fsm.PhaseKilled, false},
+		{"kill from merge_gate", fsm.PhaseMergeGate, fsm.EventKill, fsm.PhaseKilled, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

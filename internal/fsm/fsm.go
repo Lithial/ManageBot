@@ -79,7 +79,7 @@ var transitions = map[Phase]map[Event]Phase{
 // non-terminal phase.
 func Advance(from Phase, event Event) (Phase, error) {
 	if _, terminal := terminalPhases[from]; terminal {
-		return "", fmt.Errorf("cannot advance from terminal phase %q", from)
+		return "", fmt.Errorf("cannot advance from terminal phase %q (event: %q)", from, event)
 	}
 	if event == EventKill {
 		return PhaseKilled, nil
