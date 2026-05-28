@@ -104,3 +104,66 @@ func (s *Store) ProjectByName(ctx context.Context, name string) (Project, error)
 	p.VerificationCommand = verCmd.String
 	return p, nil
 }
+
+// UpdateRunPhase sets the phase of run `id` and bumps updated_at. Returns
+// ErrNotFound if no row matches.
+func (s *Store) UpdateRunPhase(ctx context.Context, id string, phase string) error {
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE runs SET phase = ?, updated_at = ? WHERE id = ?
+	`, phase, now, id)
+	if err != nil {
+		return fmt.Errorf("update run phase: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update run phase rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("update run %q phase: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// ListRunsByPhase returns all runs currently in the given phase, ordered by
+// created_at ascending so the oldest pending run is picked up first.
+func (s *Store) ListRunsByPhase(ctx context.Context, phase string) ([]Run, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, project_id, intake_kind, COALESCE(intake_ref, ''), spec_md, gates_json, phase, created_at, updated_at
+		FROM runs WHERE phase = ? ORDER BY created_at ASC
+	`, phase)
+	if err != nil {
+		return nil, fmt.Errorf("list runs by phase: %w", err)
+	}
+	defer rows.Close()
+	var out []Run
+	for rows.Next() {
+		var r Run
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.IntakeKind, &r.IntakeRef, &r.SpecMD, &r.GatesJSON, &r.Phase, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows err: %w", err)
+	}
+	return out, nil
+}
+
+// GetProject returns a project by id. Companion to ProjectByName.
+func (s *Store) GetProject(ctx context.Context, id string) (Project, error) {
+	var p Project
+	var verCmd sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, repo_path, default_gates_json, verification_command, created_at
+		FROM projects WHERE id = ?
+	`, id).Scan(&p.ID, &p.Name, &p.RepoPath, &p.DefaultGatesJSON, &verCmd, &p.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Project{}, fmt.Errorf("get project %q: %w", id, ErrNotFound)
+		}
+		return Project{}, fmt.Errorf("get project %q: %w", id, err)
+	}
+	p.VerificationCommand = verCmd.String
+	return p, nil
+}
