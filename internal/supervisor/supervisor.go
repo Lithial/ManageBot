@@ -25,6 +25,7 @@ type Outcome struct {
 	Messages       []workerrpc.Message
 	MalformedLines int    // lines that started with '{' but failed json.Unmarshal
 	Stderr         []byte // captured tail (full stderr for Phase 2)
+	WaitErr        error  // non-nil if cmd.Wait returned a non-ExitError
 }
 
 // Run spawns the configured Cmd, writes StdinPayload to its stdin, drains
@@ -44,6 +45,8 @@ func Run(ctx context.Context, req Request) (Outcome, error) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
+	// SysProcAttr.Setpgid and syscall.Kill(-pgid) below are POSIX-only.
+	// wrap intentionally targets Linux/macOS (per the project spec); no Windows build.
 	cmd.SysProcAttr.Setpgid = true
 
 	// Wire pipes.
@@ -54,6 +57,7 @@ func Run(ctx context.Context, req Request) (Outcome, error) {
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
 	var stdinW io.WriteCloser
+	var stdinDone chan struct{}
 	if req.StdinPayload != nil {
 		stdinW, err = cmd.StdinPipe()
 		if err != nil {
@@ -67,7 +71,9 @@ func Run(ctx context.Context, req Request) (Outcome, error) {
 
 	// Feed stdin.
 	if stdinW != nil {
+		stdinDone = make(chan struct{})
 		go func() {
+			defer close(stdinDone)
 			_, _ = stdinW.Write(req.StdinPayload)
 			_ = stdinW.Close()
 		}()
@@ -101,12 +107,18 @@ func Run(ctx context.Context, req Request) (Outcome, error) {
 
 	dec := <-decCh // tolerated; partial parse is fine
 
+	if stdinDone != nil {
+		<-stdinDone
+	}
+
 	exit := 0
+	var outcomeWaitErr error
 	if waitErr != nil {
 		if ee, ok := waitErr.(*exec.ExitError); ok {
 			exit = ee.ExitCode()
 		} else {
 			exit = -1
+			outcomeWaitErr = fmt.Errorf("wait: %w", waitErr)
 		}
 	}
 
@@ -115,5 +127,6 @@ func Run(ctx context.Context, req Request) (Outcome, error) {
 		Messages:       dec.msgs,
 		MalformedLines: dec.malformed,
 		Stderr:         stderrBuf.Bytes(),
+		WaitErr:        outcomeWaitErr,
 	}, nil
 }

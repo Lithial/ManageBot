@@ -71,8 +71,11 @@ func TestRun_contextCancelKillsProcess(t *testing.T) {
 	start := time.Now()
 	out, err := supervisor.Run(ctx, supervisor.Request{Cmd: cmd})
 	elapsed := time.Since(start)
-	if err == nil && out.ExitCode == 0 {
-		t.Fatal("expected non-zero exit when context cancelled")
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if out.ExitCode == 0 {
+		t.Fatal("expected non-zero ExitCode when context cancelled")
 	}
 	if elapsed > 3*time.Second {
 		t.Errorf("Run took %v, expected sub-second after cancel", elapsed)
