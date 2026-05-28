@@ -3,21 +3,14 @@ package store_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/Lithial/ManageBot/internal/store"
 )
 
 func TestInsertProjectAndRun(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "wrap.db")
-	s, err := store.Open(context.Background(), dbPath)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
 	ctx := context.Background()
+	s := openTempStore(t)
 
 	p := store.Project{
 		Name:             "demo",
@@ -62,14 +55,8 @@ func TestInsertProjectAndRun(t *testing.T) {
 }
 
 func TestInsertProjectDuplicateNameFails(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "wrap.db")
-	s, err := store.Open(context.Background(), dbPath)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
 	ctx := context.Background()
+	s := openTempStore(t)
 	p := store.Project{Name: "demo", RepoPath: "/tmp/r", DefaultGatesJSON: "{}"}
 	if _, err := s.InsertProject(ctx, p); err != nil {
 		t.Fatalf("first InsertProject: %v", err)
@@ -137,6 +124,18 @@ func TestListRunsByPhase(t *testing.T) {
 	}
 	if len(pending) != 1 || pending[0].ID != r1 {
 		t.Errorf("pending runs = %+v, want [%s]", pending, r1)
+	}
+}
+
+func TestListRunsByPhase_empty(t *testing.T) {
+	ctx := context.Background()
+	s := openTempStore(t)
+	got, err := s.ListRunsByPhase(ctx, "pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("expected nil slice for empty result, got %v", got)
 	}
 }
 

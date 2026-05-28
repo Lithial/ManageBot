@@ -37,6 +37,9 @@ func TestInsertAndGetPlan(t *testing.T) {
 	if got.PlanMD != pl.PlanMD || got.TasksJSON != pl.TasksJSON || got.RunID != rid {
 		t.Errorf("plan mismatch: got %+v want %+v", got, pl)
 	}
+	if got.ApprovedAt != 0 {
+		t.Errorf("ApprovedAt = %d, want 0 (unapproved)", got.ApprovedAt)
+	}
 }
 
 func TestGetPlanByRun_notFound(t *testing.T) {

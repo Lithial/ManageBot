@@ -13,6 +13,34 @@ import (
 // ErrNotFound is returned when a requested entity does not exist in the store.
 var ErrNotFound = errors.New("not found")
 
+// scanProject scans a single projects row into a Project value, converting
+// the nullable verification_command column into a plain string.
+func scanProject(row *sql.Row) (Project, error) {
+	var p Project
+	var verCmd sql.NullString
+	if err := row.Scan(&p.ID, &p.Name, &p.RepoPath, &p.DefaultGatesJSON, &verCmd, &p.CreatedAt); err != nil {
+		return Project{}, err
+	}
+	p.VerificationCommand = verCmd.String
+	return p, nil
+}
+
+const projectColumns = `id, name, repo_path, default_gates_json, verification_command, created_at`
+
+// scanRun scans one row from a *sql.Rows or *sql.Row into a Run value.
+// COALESCE on intake_ref is applied at the SELECT site, not here.
+func scanRun(scanner interface {
+	Scan(dest ...any) error
+}) (Run, error) {
+	var r Run
+	if err := scanner.Scan(&r.ID, &r.ProjectID, &r.IntakeKind, &r.IntakeRef, &r.SpecMD, &r.GatesJSON, &r.Phase, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		return Run{}, err
+	}
+	return r, nil
+}
+
+const runColumns = `id, project_id, intake_kind, COALESCE(intake_ref, ''), spec_md, gates_json, phase, created_at, updated_at`
+
 type Project struct {
 	ID                  string
 	Name                string
@@ -74,11 +102,8 @@ func (s *Store) InsertRun(ctx context.Context, r Run) (string, error) {
 }
 
 func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
-	var r Run
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, project_id, intake_kind, COALESCE(intake_ref, ''), spec_md, gates_json, phase, created_at, updated_at
-		FROM runs WHERE id = ?
-	`, id).Scan(&r.ID, &r.ProjectID, &r.IntakeKind, &r.IntakeRef, &r.SpecMD, &r.GatesJSON, &r.Phase, &r.CreatedAt, &r.UpdatedAt)
+	row := s.db.QueryRowContext(ctx, `SELECT `+runColumns+` FROM runs WHERE id = ?`, id)
+	r, err := scanRun(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Run{}, fmt.Errorf("get run %q: %w", id, ErrNotFound)
@@ -89,19 +114,14 @@ func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
 }
 
 func (s *Store) ProjectByName(ctx context.Context, name string) (Project, error) {
-	var p Project
-	var verCmd sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, repo_path, default_gates_json, verification_command, created_at
-		FROM projects WHERE name = ?
-	`, name).Scan(&p.ID, &p.Name, &p.RepoPath, &p.DefaultGatesJSON, &verCmd, &p.CreatedAt)
+	row := s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE name = ?`, name)
+	p, err := scanProject(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Project{}, fmt.Errorf("project by name %q: %w", name, ErrNotFound)
 		}
 		return Project{}, fmt.Errorf("project by name %q: %w", name, err)
 	}
-	p.VerificationCommand = verCmd.String
 	return p, nil
 }
 
@@ -128,18 +148,15 @@ func (s *Store) UpdateRunPhase(ctx context.Context, id string, phase string) err
 // ListRunsByPhase returns all runs currently in the given phase, ordered by
 // created_at ascending so the oldest pending run is picked up first.
 func (s *Store) ListRunsByPhase(ctx context.Context, phase string) ([]Run, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, project_id, intake_kind, COALESCE(intake_ref, ''), spec_md, gates_json, phase, created_at, updated_at
-		FROM runs WHERE phase = ? ORDER BY created_at ASC
-	`, phase)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+runColumns+` FROM runs WHERE phase = ? ORDER BY created_at ASC`, phase)
 	if err != nil {
 		return nil, fmt.Errorf("list runs by phase: %w", err)
 	}
 	defer rows.Close()
 	var out []Run
 	for rows.Next() {
-		var r Run
-		if err := rows.Scan(&r.ID, &r.ProjectID, &r.IntakeKind, &r.IntakeRef, &r.SpecMD, &r.GatesJSON, &r.Phase, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		r, err := scanRun(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan run: %w", err)
 		}
 		out = append(out, r)
@@ -152,18 +169,13 @@ func (s *Store) ListRunsByPhase(ctx context.Context, phase string) ([]Run, error
 
 // GetProject returns a project by id. Companion to ProjectByName.
 func (s *Store) GetProject(ctx context.Context, id string) (Project, error) {
-	var p Project
-	var verCmd sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, repo_path, default_gates_json, verification_command, created_at
-		FROM projects WHERE id = ?
-	`, id).Scan(&p.ID, &p.Name, &p.RepoPath, &p.DefaultGatesJSON, &verCmd, &p.CreatedAt)
+	row := s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = ?`, id)
+	p, err := scanProject(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Project{}, fmt.Errorf("get project %q: %w", id, ErrNotFound)
 		}
 		return Project{}, fmt.Errorf("get project %q: %w", id, err)
 	}
-	p.VerificationCommand = verCmd.String
 	return p, nil
 }
