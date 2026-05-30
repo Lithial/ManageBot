@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -66,6 +67,30 @@ func (s *Store) FinishWorker(ctx context.Context, id, status string, exitCode in
 		return fmt.Errorf("finish worker %q: %w", id, ErrNotFound)
 	}
 	return nil
+}
+
+// GetWorker returns a single worker row by id, or ErrNotFound.
+func (s *Store) GetWorker(ctx context.Context, id string) (Worker, error) {
+	var w Worker
+	var pid, exitCode, startedAt, endedAt sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, run_id, task_id, branch, worktree_path, pid, status, exit_code, started_at, ended_at
+		FROM workers WHERE id = ?
+	`, id).Scan(&w.ID, &w.RunID, &w.TaskID, &w.Branch, &w.WorktreePath, &pid, &w.Status, &exitCode, &startedAt, &endedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Worker{}, fmt.Errorf("get worker %q: %w", id, ErrNotFound)
+		}
+		return Worker{}, fmt.Errorf("get worker %q: %w", id, err)
+	}
+	w.PID = pid.Int64
+	w.StartedAt = startedAt.Int64
+	w.EndedAt = endedAt.Int64
+	if exitCode.Valid {
+		v := exitCode.Int64
+		w.ExitCode = &v
+	}
+	return w, nil
 }
 
 // ListRunningWorkers returns every worker row still in status 'running' across

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Lithial/ManageBot/internal/store"
@@ -77,6 +78,28 @@ func TestFinishWorker(t *testing.T) {
 	}
 	if w.EndedAt == 0 {
 		t.Errorf("EndedAt = 0, want set")
+	}
+}
+
+func TestGetWorker(t *testing.T) {
+	ctx := context.Background()
+	s := openTempStore(t)
+	pid, _ := s.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/repo", DefaultGatesJSON: "{}"})
+	rid, _ := s.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "spec", GatesJSON: "{}"})
+	wid, _ := s.InsertWorker(ctx, store.Worker{RunID: rid, TaskID: "t1", Branch: "b", WorktreePath: "/wt"})
+
+	got, err := s.GetWorker(ctx, wid)
+	if err != nil {
+		t.Fatalf("GetWorker: %v", err)
+	}
+	if got.ID != wid || got.RunID != rid || got.TaskID != "t1" {
+		t.Errorf("worker = %+v", got)
+	}
+}
+
+func TestGetWorker_notFound(t *testing.T) {
+	if _, err := openTempStore(t).GetWorker(context.Background(), "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
 

@@ -20,6 +20,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /runs/{id}/approve", s.handleResolveGate("approved"))
 	mux.HandleFunc("POST /runs/{id}/reject", s.handleResolveGate("rejected"))
 	mux.HandleFunc("POST /runs/{id}/kill", s.handleKill)
+	s.registerWorkerRoutes(mux)
 }
 
 // handleKill moves a run to the terminal `killed` phase and rejects any pending

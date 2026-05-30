@@ -9,8 +9,8 @@ type SubmitRunRequest struct {
 	IntakeKind          string `json:"intake_kind"` // "cli" | "specfile" | "github"
 	IntakeRef           string `json:"intake_ref,omitempty"`
 	SpecMD              string `json:"spec_md"`
-	GatesJSON           string `json:"gates_json,omitempty"`            // optional; daemon falls back to project default
-	VerificationCommand string `json:"verification_command,omitempty"`  // optional; only used when project is being created
+	GatesJSON           string `json:"gates_json,omitempty"`           // optional; daemon falls back to project default
+	VerificationCommand string `json:"verification_command,omitempty"` // optional; only used when project is being created
 }
 
 // SubmitRunResponse is the body of a successful POST /runs.
@@ -69,4 +69,24 @@ type ResolveGateResponse struct {
 type KillResponse struct {
 	RunID string `json:"run_id"`
 	Phase string `json:"phase"` // "killed"
+}
+
+// WorkerTaskResponse is the body of GET /workers/{id}/task (the wrap.read_task tool).
+type WorkerTaskResponse struct {
+	TaskID      string `json:"task_id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+// SiblingTasksResponse is the body of GET /workers/{id}/siblings (wrap.list_sibling_tasks).
+type SiblingTasksResponse struct {
+	Titles []string `json:"titles"`
+}
+
+// WorkerReportRequest is the body of POST /workers/{id}/progress|done|blocked.
+// Each endpoint reads the field it cares about.
+type WorkerReportRequest struct {
+	Msg     string `json:"msg,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
