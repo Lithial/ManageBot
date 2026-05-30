@@ -37,6 +37,16 @@ const (
 	taskIDMerger  = "__merger__"
 )
 
+// Role directives appended to each subprocess's stdin (the user message). The
+// appended *system* prompt alone is unreliable — Claude tends to answer in prose
+// unless the imperative to call the tool is in the user turn. fake-claude ignores
+// stdin, so these are no-ops in tests.
+const (
+	plannerDirective = "\n\n---\nNow deliver the plan by calling the report_plan tool. Reply with no prose."
+	workerDirective  = "\n\n---\nComplete this task in the current git worktree and commit your changes, then call the report_done tool (or report_blocked if you are stuck). Reply with no prose."
+	mergerDirective  = "\n\n---\nMerge the listed branches into the current branch, then call the report_done tool (or report_blocked if you cannot). Reply with no prose."
+)
+
 type Config struct {
 	Store       *store.Store
 	StateDir    string         // root for worktrees (e.g. ~/.wrap)

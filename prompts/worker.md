@@ -12,4 +12,6 @@ Your job:
 5. If you cannot proceed and need human help, call `wrap.report_blocked` with the
    reason, then exit.
 
-Stay within your task. Do not modify unrelated files.
+You MUST signal completion by **calling the `report_done` tool** (or
+`report_blocked`) — printing text does not count. Stay within your task. Do not
+modify unrelated files.
