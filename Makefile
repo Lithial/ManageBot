@@ -1,7 +1,7 @@
 GO ?= go
 BIN_DIR := bin
 
-.PHONY: all build wrap wrapd wrap-mcp fake-claude test test-unit test-integration clean
+.PHONY: all build wrap wrapd wrap-mcp fake-claude test test-unit test-integration test-e2e clean
 
 all: build
 
@@ -26,6 +26,11 @@ test-unit:
 
 test-integration: fake-claude wrapd wrap
 	$(GO) test -tags=integration ./test/integration/...
+
+# Opt-in real-claude smoke. Needs `claude` on PATH (uses its own auth) and spends
+# real API usage; never part of `make test`. Skips if claude is absent.
+test-e2e: build
+	$(GO) test -tags='integration e2e' ./test/integration/... -run TestE2E -v -timeout 20m
 
 clean:
 	rm -rf $(BIN_DIR)
