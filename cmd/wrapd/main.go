@@ -90,7 +90,19 @@ func main() {
 	// WRAP_MCP_SOCKET env also drives fake-claude's MCP mode in tests (it ignores
 	// the claude-only args).
 	spawn := func(bin string, extraEnv []string, role, workerID string) *exec.Cmd {
-		args := []string{"-p", "--mcp-config", mcpConfigJSON(*wrapMcpCmd, *socket, workerID)}
+		// Headless, autonomous claude: -p (print); --permission-mode auto so tool
+		// use doesn't block on interactive prompts; --setting-sources project to
+		// isolate the worker from the operator's personal global settings/hooks
+		// (e.g. an "explanatory" output style that pushes claude toward prose
+		// instead of tool calls); and load ONLY the wrap MCP server. fake-claude
+		// ignores these claude-only flags.
+		args := []string{
+			"-p",
+			"--permission-mode", "auto",
+			"--setting-sources", "project",
+			"--strict-mcp-config",
+			"--mcp-config", mcpConfigJSON(*wrapMcpCmd, *socket, workerID),
+		}
 		if *promptDir != "" {
 			args = append(args, "--append-system-prompt", filepath.Join(*promptDir, role+".md"))
 		}

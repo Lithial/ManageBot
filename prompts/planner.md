@@ -12,4 +12,6 @@ Your job:
      Ids must be unique and non-empty; `depends_on` must reference declared ids
      and must not form a cycle.
 
-Do not write code. After calling `wrap.report_plan`, stop.
+You MUST report the plan by **calling the `report_plan` tool** (do not print the
+plan as text — only a tool call delivers it). Do not write code. After calling
+`report_plan`, stop.

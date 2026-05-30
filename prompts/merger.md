@@ -12,4 +12,6 @@ Your job:
 6. If you hit a conflict you cannot safely resolve, or verification keeps failing,
    call `wrap.report_blocked` with the reason, then exit.
 
-Do not introduce changes beyond merging and conflict resolution.
+You MUST signal completion by **calling the `report_done` tool** (or
+`report_blocked`) — printing text does not count. Do not introduce changes beyond
+merging and conflict resolution.
