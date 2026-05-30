@@ -36,6 +36,14 @@ type PlanParams struct {
 	TasksJSON string `json:"tasks_json"`
 }
 
+type DoneParams struct {
+	Summary string `json:"summary"`
+}
+
+type BlockedParams struct {
+	Reason string `json:"reason"`
+}
+
 // DecodeAll reads NDJSON from r until EOF. Returns:
 //   - msgs: every JSON-object line that parsed cleanly and had a non-empty method.
 //   - malformed: count of lines that started with '{' but failed json.Unmarshal.
@@ -95,6 +103,30 @@ func AsPlan(m Message) (PlanParams, error) {
 	var p PlanParams
 	if err := json.Unmarshal(m.Params, &p); err != nil {
 		return PlanParams{}, fmt.Errorf("AsPlan unmarshal (method=%q, raw=%s): %w", m.Method, m.Params, err)
+	}
+	return p, nil
+}
+
+// AsDone decodes a Message as DoneParams. Same error-rich shape as AsProgress.
+func AsDone(m Message) (DoneParams, error) {
+	if m.Method != MethodReportDone {
+		return DoneParams{}, fmt.Errorf("AsDone: method = %q", m.Method)
+	}
+	var p DoneParams
+	if err := json.Unmarshal(m.Params, &p); err != nil {
+		return DoneParams{}, fmt.Errorf("AsDone unmarshal (method=%q, raw=%s): %w", m.Method, m.Params, err)
+	}
+	return p, nil
+}
+
+// AsBlocked decodes a Message as BlockedParams. Same error-rich shape as AsProgress.
+func AsBlocked(m Message) (BlockedParams, error) {
+	if m.Method != MethodReportBlocked {
+		return BlockedParams{}, fmt.Errorf("AsBlocked: method = %q", m.Method)
+	}
+	var p BlockedParams
+	if err := json.Unmarshal(m.Params, &p); err != nil {
+		return BlockedParams{}, fmt.Errorf("AsBlocked unmarshal (method=%q, raw=%s): %w", m.Method, m.Params, err)
 	}
 	return p, nil
 }

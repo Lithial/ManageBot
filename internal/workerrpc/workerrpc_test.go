@@ -84,6 +84,50 @@ func TestAsProgress_wrongMethod(t *testing.T) {
 	}
 }
 
+func TestDecoder_doneAndBlocked(t *testing.T) {
+	input := strings.Join([]string{
+		`{"method":"report_done","params":{"summary":"shipped it"}}`,
+		`{"method":"report_blocked","params":{"reason":"merge conflict"}}`,
+		``,
+	}, "\n")
+	got, malformed, err := workerrpc.DecodeAll(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("DecodeAll: %v", err)
+	}
+	if malformed != 0 {
+		t.Errorf("malformed = %d, want 0", malformed)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len=%d, want 2: %+v", len(got), got)
+	}
+	done, err := workerrpc.AsDone(got[0])
+	if err != nil {
+		t.Fatalf("AsDone: %v", err)
+	}
+	if done.Summary != "shipped it" {
+		t.Errorf("done.Summary = %q", done.Summary)
+	}
+	blocked, err := workerrpc.AsBlocked(got[1])
+	if err != nil {
+		t.Fatalf("AsBlocked: %v", err)
+	}
+	if blocked.Reason != "merge conflict" {
+		t.Errorf("blocked.Reason = %q", blocked.Reason)
+	}
+}
+
+func TestAsDone_wrongMethod(t *testing.T) {
+	if _, err := workerrpc.AsDone(workerrpc.Message{Method: "report_blocked"}); err == nil {
+		t.Fatal("AsDone on report_blocked: want error, got nil")
+	}
+}
+
+func TestAsBlocked_wrongMethod(t *testing.T) {
+	if _, err := workerrpc.AsBlocked(workerrpc.Message{Method: "report_done"}); err == nil {
+		t.Fatal("AsBlocked on report_done: want error, got nil")
+	}
+}
+
 func TestDecoder_countsMalformedJSON(t *testing.T) {
 	input := strings.Join([]string{
 		`{this is not json`,
