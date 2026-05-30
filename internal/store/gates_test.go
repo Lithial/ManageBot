@@ -46,7 +46,7 @@ func TestPendingGateByRun_noneWhenAllResolved(t *testing.T) {
 	s := openTempStore(t)
 	rid := seedRun(t, s)
 	gid, _ := s.InsertGate(ctx, store.Gate{RunID: rid, Kind: "plan", PayloadJSON: "{}"})
-	if err := s.ResolveGate(ctx, gid, "approved", "cli"); err != nil {
+	if err := s.ResolveGate(ctx, gid, "approved", "cli", ""); err != nil {
 		t.Fatalf("ResolveGate: %v", err)
 	}
 	if _, err := s.PendingGateByRun(ctx, rid); !errors.Is(err, store.ErrNotFound) {
@@ -60,7 +60,7 @@ func TestResolveGate(t *testing.T) {
 	rid := seedRun(t, s)
 	gid, _ := s.InsertGate(ctx, store.Gate{RunID: rid, Kind: "merge", PayloadJSON: "{}"})
 
-	if err := s.ResolveGate(ctx, gid, "rejected", "alice"); err != nil {
+	if err := s.ResolveGate(ctx, gid, "rejected", "alice", ""); err != nil {
 		t.Fatalf("ResolveGate: %v", err)
 	}
 	g, err := s.LatestGateByKind(ctx, rid, "merge")
@@ -72,17 +72,37 @@ func TestResolveGate(t *testing.T) {
 	}
 }
 
+func TestResolveGatePersistsAction(t *testing.T) {
+	ctx := context.Background()
+	s := openTempStore(t)
+	rid := seedRun(t, s)
+	id, err := s.InsertGate(ctx, store.Gate{RunID: rid, Kind: "merge_conflict", PayloadJSON: "{}"})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := s.ResolveGate(ctx, id, "approved", "tester", "drop_branch"); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	g, err := s.LatestGateByKind(ctx, rid, "merge_conflict")
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if g.Action != "drop_branch" {
+		t.Errorf("Action=%q want drop_branch", g.Action)
+	}
+}
+
 func TestResolveGate_alreadyResolvedConflicts(t *testing.T) {
 	ctx := context.Background()
 	s := openTempStore(t)
 	rid := seedRun(t, s)
 	gid, _ := s.InsertGate(ctx, store.Gate{RunID: rid, Kind: "plan", PayloadJSON: "{}"})
 
-	if err := s.ResolveGate(ctx, gid, "approved", "first"); err != nil {
+	if err := s.ResolveGate(ctx, gid, "approved", "first", ""); err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
 	// A second resolution of the same gate must conflict, not silently overwrite.
-	err := s.ResolveGate(ctx, gid, "rejected", "second")
+	err := s.ResolveGate(ctx, gid, "rejected", "second", "")
 	if !errors.Is(err, store.ErrGateNotPending) {
 		t.Fatalf("second resolve err = %v, want ErrGateNotPending", err)
 	}
@@ -96,7 +116,7 @@ func TestResolveGate_alreadyResolvedConflicts(t *testing.T) {
 func TestResolveGate_unknown(t *testing.T) {
 	ctx := context.Background()
 	s := openTempStore(t)
-	if err := s.ResolveGate(ctx, "no-such-gate", "approved", "cli"); !errors.Is(err, store.ErrNotFound) {
+	if err := s.ResolveGate(ctx, "no-such-gate", "approved", "cli", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }

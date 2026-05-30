@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS runs (
   spec_md      TEXT NOT NULL,
   gates_json   TEXT NOT NULL,
   phase        TEXT NOT NULL,
+  max_workers            INTEGER,
+  worker_idle_timeout_ms INTEGER,
   created_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL
 );
@@ -38,7 +40,8 @@ CREATE TABLE IF NOT EXISTS workers (
   status        TEXT NOT NULL,
   exit_code     INTEGER,
   started_at    INTEGER,
-  ended_at      INTEGER
+  ended_at      INTEGER,
+  last_progress_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -58,6 +61,7 @@ CREATE TABLE IF NOT EXISTS gates (
   payload_json TEXT NOT NULL,
   resolved_by  TEXT,
   resolved_at  INTEGER,
+  action       TEXT,
   created_at   INTEGER NOT NULL
 );
 

@@ -47,7 +47,7 @@ func TestTick_planGateApproved_advancesToWorking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PendingGateByRun: %v", err)
 	}
-	if err := st.ResolveGate(context.Background(), g.ID, "approved", "cli"); err != nil {
+	if err := st.ResolveGate(context.Background(), g.ID, "approved", "cli", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,7 +81,7 @@ func TestTick_planGateRejected_failsRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PendingGateByRun: %v", err)
 	}
-	if err := st.ResolveGate(context.Background(), g.ID, "rejected", "cli"); err != nil {
+	if err := st.ResolveGate(context.Background(), g.ID, "rejected", "cli", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := o.Tick(context.Background()); err != nil {

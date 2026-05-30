@@ -1,13 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 
 	"github.com/Lithial/ManageBot/internal/fsm"
+	"github.com/Lithial/ManageBot/internal/gates"
 	"github.com/Lithial/ManageBot/internal/intake"
 	"github.com/Lithial/ManageBot/internal/store"
 )
@@ -19,6 +22,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /runs/{id}", s.handleGetRun)
 	mux.HandleFunc("POST /runs/{id}/approve", s.handleResolveGate("approved"))
 	mux.HandleFunc("POST /runs/{id}/reject", s.handleResolveGate("rejected"))
+	mux.HandleFunc("POST /runs/{id}/resolve", s.handleResolveDecision)
 	mux.HandleFunc("POST /runs/{id}/kill", s.handleKill)
 	s.registerWorkerRoutes(mux)
 }
@@ -57,7 +61,7 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reject any pending gate so it doesn't linger awaiting a decision.
 	if g, err := s.store.PendingGateByRun(ctx, id); err == nil {
-		if err := s.store.ResolveGate(ctx, g.ID, "rejected", "killed_by_user"); err != nil && !errors.Is(err, store.ErrGateNotPending) {
+		if err := s.store.ResolveGate(ctx, g.ID, "rejected", "killed_by_user", ""); err != nil && !errors.Is(err, store.ErrGateNotPending) {
 			log.Printf("api: kill reject gate: %v", err)
 		}
 	} else if !errors.Is(err, store.ErrNotFound) {
@@ -202,43 +206,75 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 // its next tick and advances the FSM; the API never mutates run phase directly.
 func (s *Server) handleResolveGate(status string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		ctx := r.Context()
-
-		// Body is optional; default resolver is "cli".
-		req := intake.ResolveGateRequest{}
-		if r.Body != nil {
-			_ = json.NewDecoder(r.Body).Decode(&req) // tolerate empty/invalid body
-		}
-		by := req.By
-		if by == "" {
-			by = "cli"
-		}
-
-		gate, err := s.store.PendingGateByRun(ctx, id)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				writeError(w, http.StatusConflict, "no pending gate for this run")
-				return
-			}
-			log.Printf("api: %v", err)
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
-		}
-		if err := s.store.ResolveGate(ctx, gate.ID, status, by); err != nil {
-			if errors.Is(err, store.ErrGateNotPending) {
-				// Lost the race to a concurrent resolution.
-				writeError(w, http.StatusConflict, "gate already resolved")
-				return
-			}
-			log.Printf("api: %v", err)
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
-		}
-		writeJSON(w, http.StatusOK, intake.ResolveGateResponse{
-			RunID: id, GateID: gate.ID, Status: status,
-		})
+		s.resolvePendingGate(w, r, status)
 	}
+}
+
+// handleResolveDecision resolves the pending gate using a {decision, action}
+// body. It exists for the richer actions (retry/takeover/drop_branch) that are
+// neither a plain approve nor reject. Decision defaults to approve.
+func (s *Server) handleResolveDecision(w http.ResponseWriter, r *http.Request) {
+	// Peek the decision to choose the status; the body is decoded again inside
+	// resolvePendingGate for `by`/`action` (cheap, and keeps one decode path).
+	status := "approved"
+	if r.Body != nil {
+		var peek intake.ResolveGateRequest
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &peek)
+		if peek.Decision == "reject" || peek.Decision == "rejected" {
+			status = "rejected"
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body)) // restore for the re-decode
+	}
+	s.resolvePendingGate(w, r, status)
+}
+
+// resolvePendingGate is the shared resolution path: decode the body, validate
+// the action against the gate kind, and resolve. Single writer of phase remains
+// the orchestrator — this only flips the gate row.
+func (s *Server) resolvePendingGate(w http.ResponseWriter, r *http.Request, status string) {
+	id := r.PathValue("id")
+	ctx := r.Context()
+
+	// Body is optional; default resolver is "cli".
+	req := intake.ResolveGateRequest{}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req) // tolerate empty/invalid body
+	}
+	by := req.By
+	if by == "" {
+		by = "cli"
+	}
+
+	gate, err := s.store.PendingGateByRun(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusConflict, "no pending gate for this run")
+			return
+		}
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	// Reject an action that doesn't belong to this gate kind before touching the
+	// row, so the orchestrator never observes a nonsense action.
+	if !gates.ValidAction(gate.Kind, req.Action) {
+		writeError(w, http.StatusBadRequest, "invalid action for gate kind "+gate.Kind)
+		return
+	}
+	if err := s.store.ResolveGate(ctx, gate.ID, status, by, req.Action); err != nil {
+		if errors.Is(err, store.ErrGateNotPending) {
+			// Lost the race to a concurrent resolution.
+			writeError(w, http.StatusConflict, "gate already resolved")
+			return
+		}
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, intake.ResolveGateResponse{
+		RunID: id, GateID: gate.ID, Status: status,
+	})
 }
 
 func (s *Server) findOrCreateProject(ctx context.Context, req intake.SubmitRunRequest) (string, error) {

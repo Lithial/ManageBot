@@ -33,7 +33,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: wrap <command> [args...]\ncommands: run, submit, github, emit, approve, reject, kill, tui, attach")
+		return errors.New("usage: wrap <command> [args...]\ncommands: run, submit, github, emit, approve, reject, resolve, kill, tui, attach")
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -43,6 +43,8 @@ func run(args []string) error {
 		return cmdResolveGate("approve", rest)
 	case "reject":
 		return cmdResolveGate("reject", rest)
+	case "resolve":
+		return cmdResolve(rest)
 	case "tui":
 		return cmdTUI(rest)
 	case "attach":
@@ -124,6 +126,33 @@ func cmdResolveGate(action string, args []string) error {
 	} else {
 		resp, err = c.Reject(context.Background(), runID, *by)
 	}
+	if err != nil {
+		return err
+	}
+	out, _ := json.MarshalIndent(resp, "", "  ")
+	fmt.Println(string(out))
+	return nil
+}
+
+// cmdResolve implements `wrap resolve <run-id> --action <a> [--decision approve|reject]`,
+// resolving the run's pending gate with a typed action (e.g. drop_branch,
+// takeover, retry) for the worker_blocked / merge_conflict gates.
+func cmdResolve(args []string) error {
+	fs := flag.NewFlagSet("resolve", flag.ContinueOnError)
+	socket := fs.String("socket", defaultSocketPath(), "wrapd Unix socket path")
+	by := fs.String("by", "cli", "who is resolving the gate")
+	action := fs.String("action", "", "typed resolution action (proceed|retry|abort|drop_branch|takeover)")
+	decision := fs.String("decision", "approve", "approve or reject")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: wrap resolve [--socket PATH] [--by NAME] [--decision approve|reject] --action ACTION <run-id>")
+	}
+	runID := fs.Arg(0)
+
+	c := client.New(*socket)
+	resp, err := c.Resolve(context.Background(), runID, *decision, *action, *by)
 	if err != nil {
 		return err
 	}

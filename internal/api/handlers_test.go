@@ -415,3 +415,68 @@ func newSocketClient(sock string) *http.Client {
 		},
 	}
 }
+
+// seedPendingGate inserts a project, a run in plan_gate, and a pending gate of
+// the given kind, returning the run id.
+func seedPendingGate(t *testing.T, st *store.Store, kind string) string {
+	t.Helper()
+	ctx := context.Background()
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p-" + kind, RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "plan_gate"})
+	if _, err := st.InsertGate(ctx, store.Gate{RunID: rid, Kind: kind, PayloadJSON: "{}"}); err != nil {
+		t.Fatalf("insert gate: %v", err)
+	}
+	return rid
+}
+
+// TestResolveGate_rejectsInvalidAction: an action not valid for the gate kind is
+// a 400, before any resolution happens.
+func TestResolveGate_rejectsInvalidAction(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	rid := seedPendingGate(t, st, "merge") // merge gates take proceed|abort, not drop_branch
+
+	resp, err := c.Post("http://wrap/runs/"+rid+"/approve", "application/json",
+		strings.NewReader(`{"by":"alice","action":"drop_branch"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	// The gate must still be pending (no resolution on a rejected action).
+	g, err := st.PendingGateByRun(context.Background(), rid)
+	if err != nil {
+		t.Fatalf("pending gate should still exist: %v", err)
+	}
+	if g.Status != "pending" {
+		t.Errorf("gate status = %q, want pending", g.Status)
+	}
+}
+
+// TestResolveDecision_persistsAction: POST /resolve carries decision+action and
+// persists both.
+func TestResolveDecision_persistsAction(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	rid := seedPendingGate(t, st, "merge_conflict")
+
+	resp, err := c.Post("http://wrap/runs/"+rid+"/resolve", "application/json",
+		strings.NewReader(`{"by":"alice","decision":"approve","action":"drop_branch"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200 (%s)", resp.StatusCode, raw)
+	}
+	g, err := st.LatestGateByKind(context.Background(), rid, "merge_conflict")
+	if err != nil {
+		t.Fatalf("latest gate: %v", err)
+	}
+	if g.Status != "approved" || g.Action != "drop_branch" {
+		t.Errorf("gate = {status:%q action:%q}, want {approved drop_branch}", g.Status, g.Action)
+	}
+}

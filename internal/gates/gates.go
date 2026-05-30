@@ -57,6 +57,42 @@ func Parse(gatesJSON string) (Policy, error) {
 	return p, nil
 }
 
+// Action constants for typed gate resolution. The empty action is always valid
+// and preserves the legacy approve=proceed / reject=abort semantics.
+const (
+	ActionProceed    = "proceed"
+	ActionAbort      = "abort"
+	ActionRetry      = "retry"
+	ActionDropBranch = "drop_branch"
+	ActionTakeover   = "takeover"
+)
+
+// actionsByKind lists the non-empty actions each gate kind accepts. Plan/merge
+// gates take only proceed/abort (the approve/reject defaults). worker_blocked and
+// merge_conflict take their recovery-specific actions.
+var actionsByKind = map[string][]string{
+	"plan":           {ActionProceed, ActionAbort},
+	"merge":          {ActionProceed, ActionAbort},
+	"worker_done":    {ActionProceed, ActionAbort},
+	"worker_blocked": {ActionProceed, ActionRetry, ActionAbort},
+	"merge_conflict": {ActionDropBranch, ActionTakeover, ActionAbort},
+}
+
+// ValidAction reports whether action is acceptable for gate kind. The empty
+// action is always valid (default decision semantics). An unknown kind accepts
+// only the empty action (never invent recovery options for it).
+func ValidAction(kind, action string) bool {
+	if action == "" {
+		return true
+	}
+	for _, a := range actionsByKind[kind] {
+		if a == action {
+			return true
+		}
+	}
+	return false
+}
+
 // Mode returns the mode governing gate kind, defaulting to require_approval for
 // any kind not explicitly configured (never auto-approve the unspecified).
 func (p Policy) Mode(kind string) Mode {
