@@ -33,13 +33,15 @@ func scanRun(scanner interface {
 	Scan(dest ...any) error
 }) (Run, error) {
 	var r Run
-	if err := scanner.Scan(&r.ID, &r.ProjectID, &r.IntakeKind, &r.IntakeRef, &r.SpecMD, &r.GatesJSON, &r.Phase, &r.CreatedAt, &r.UpdatedAt); err != nil {
+	if err := scanner.Scan(&r.ID, &r.ProjectID, &r.IntakeKind, &r.IntakeRef, &r.SpecMD, &r.GatesJSON, &r.Phase, &r.CreatedAt, &r.UpdatedAt, &r.MaxWorkers); err != nil {
 		return Run{}, err
 	}
 	return r, nil
 }
 
-const runColumns = `id, project_id, intake_kind, COALESCE(intake_ref, ''), spec_md, gates_json, phase, created_at, updated_at`
+// max_workers is nullable (NULL = unset, callers fall back to the daemon
+// default); COALESCE keeps MaxWorkers a plain int64 where 0 means unset.
+const runColumns = `id, project_id, intake_kind, COALESCE(intake_ref, ''), spec_md, gates_json, phase, created_at, updated_at, COALESCE(max_workers, 0)`
 
 type Project struct {
 	ID                  string
@@ -58,6 +60,9 @@ type Run struct {
 	SpecMD     string
 	GatesJSON  string
 	Phase      string
+	// MaxWorkers is the per-run concurrency cap. 0 means unset (the daemon
+	// default applies); a positive value overrides it.
+	MaxWorkers int64
 	CreatedAt  int64
 	UpdatedAt  int64
 }
@@ -91,10 +96,16 @@ func (s *Store) InsertRun(ctx context.Context, r Run) (string, error) {
 	if r.Phase == "" {
 		r.Phase = "pending"
 	}
+	// Persist NULL for an unset cap (0) so COALESCE-on-read keeps the "0 = unset"
+	// semantics distinct from a deliberate (and invalid) cap of 0.
+	var maxWorkers any
+	if r.MaxWorkers > 0 {
+		maxWorkers = r.MaxWorkers
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs (id, project_id, intake_kind, intake_ref, spec_md, gates_json, phase, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, r.ProjectID, r.IntakeKind, r.IntakeRef, r.SpecMD, r.GatesJSON, r.Phase, now, now)
+		INSERT INTO runs (id, project_id, intake_kind, intake_ref, spec_md, gates_json, phase, max_workers, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, r.ProjectID, r.IntakeKind, r.IntakeRef, r.SpecMD, r.GatesJSON, r.Phase, maxWorkers, now, now)
 	if err != nil {
 		return "", fmt.Errorf("insert run: %w", err)
 	}

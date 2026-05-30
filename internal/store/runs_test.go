@@ -54,6 +54,42 @@ func TestInsertProjectAndRun(t *testing.T) {
 	}
 }
 
+func TestInsertRun_persistsMaxWorkers(t *testing.T) {
+	ctx := context.Background()
+	s := openTempStore(t)
+	pid, _ := s.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/r", DefaultGatesJSON: "{}"})
+
+	// A positive cap round-trips.
+	rid, err := s.InsertRun(ctx, store.Run{
+		ProjectID: pid, IntakeKind: "cli", SpecMD: "spec", GatesJSON: "{}", MaxWorkers: 2,
+	})
+	if err != nil {
+		t.Fatalf("InsertRun: %v", err)
+	}
+	got, err := s.GetRun(ctx, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MaxWorkers != 2 {
+		t.Errorf("MaxWorkers = %d, want 2", got.MaxWorkers)
+	}
+
+	// An unset cap (0) persists as NULL and reads back as 0 (the "unset" sentinel).
+	rid2, err := s.InsertRun(ctx, store.Run{
+		ProjectID: pid, IntakeKind: "cli", SpecMD: "spec", GatesJSON: "{}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got2, err := s.GetRun(ctx, rid2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.MaxWorkers != 0 {
+		t.Errorf("unset MaxWorkers = %d, want 0", got2.MaxWorkers)
+	}
+}
+
 func TestInsertProjectDuplicateNameFails(t *testing.T) {
 	ctx := context.Background()
 	s := openTempStore(t)

@@ -106,6 +106,13 @@ func (s *Server) handleSubmitRun(w http.ResponseWriter, r *http.Request) {
 		gates = p.DefaultGatesJSON
 	}
 
+	// Default chain: request override → daemon --max-workers flag. Resolved and
+	// persisted here so the orchestrator reads a concrete per-run cap.
+	maxWorkers := req.MaxWorkers
+	if maxWorkers < 1 {
+		maxWorkers = s.defaultMaxWorkers
+	}
+
 	rid, err := s.store.InsertRun(ctx, store.Run{
 		ProjectID:  pid,
 		IntakeKind: req.IntakeKind,
@@ -113,6 +120,7 @@ func (s *Server) handleSubmitRun(w http.ResponseWriter, r *http.Request) {
 		SpecMD:     req.SpecMD,
 		GatesJSON:  gates,
 		Phase:      "pending",
+		MaxWorkers: int64(maxWorkers),
 	})
 	if err != nil {
 		log.Printf("api: %v", err)
@@ -168,6 +176,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		Phase:      run.Phase,
 		IntakeKind: run.IntakeKind,
 		IntakeRef:  run.IntakeRef,
+		MaxWorkers: int(run.MaxWorkers),
 	}
 	plan, err := s.store.GetPlanByRun(ctx, id)
 	if err == nil {

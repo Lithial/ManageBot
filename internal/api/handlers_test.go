@@ -53,6 +53,44 @@ func TestGetRun_pendingHasNoPlan(t *testing.T) {
 	}
 }
 
+func TestSubmitRun_maxWorkersDefaultChain(t *testing.T) {
+	sock := testutil.StartInProcessServer(t) // default max workers = 4 (fallback)
+	c := newSocketClient(sock)
+
+	submit := func(t *testing.T, req intake.SubmitRunRequest) intake.GetRunResponse {
+		t.Helper()
+		body, _ := json.Marshal(req)
+		resp, err := c.Post("http://wrap/runs", "application/json", strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sr intake.SubmitRunResponse
+		_ = json.NewDecoder(resp.Body).Decode(&sr)
+		resp.Body.Close()
+
+		gresp, err := c.Get("http://wrap/runs/" + sr.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer gresp.Body.Close()
+		var got intake.GetRunResponse
+		_ = json.NewDecoder(gresp.Body).Decode(&got)
+		return got
+	}
+
+	// No request override → daemon default (4) is persisted and exposed.
+	got := submit(t, intake.SubmitRunRequest{ProjectName: "p", RepoPath: "/tmp/x", IntakeKind: "cli", SpecMD: "spec"})
+	if got.MaxWorkers != 4 {
+		t.Errorf("default MaxWorkers = %d, want 4", got.MaxWorkers)
+	}
+
+	// Request override wins over the daemon default.
+	got2 := submit(t, intake.SubmitRunRequest{ProjectName: "p", RepoPath: "/tmp/x", IntakeKind: "cli", SpecMD: "spec", MaxWorkers: 1})
+	if got2.MaxWorkers != 1 {
+		t.Errorf("override MaxWorkers = %d, want 1", got2.MaxWorkers)
+	}
+}
+
 func TestGetRun_exposesMergeResult(t *testing.T) {
 	sock, st := testutil.StartInProcessServerWithStore(t)
 	c := newSocketClient(sock)

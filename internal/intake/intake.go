@@ -11,6 +11,7 @@ type SubmitRunRequest struct {
 	SpecMD              string `json:"spec_md"`
 	GatesJSON           string `json:"gates_json,omitempty"`           // optional; daemon falls back to project default
 	VerificationCommand string `json:"verification_command,omitempty"` // optional; only used when project is being created
+	MaxWorkers          int    `json:"max_workers,omitempty"`          // optional per-run concurrency cap; 0 ⇒ daemon --max-workers default
 }
 
 // SubmitRunResponse is the body of a successful POST /runs.
@@ -36,6 +37,7 @@ type GetRunResponse struct {
 	TasksJSON    string `json:"tasks_json,omitempty"`
 	MergeBranch  string `json:"merge_branch,omitempty"`  // set once the merger has produced a branch
 	MergeSummary string `json:"merge_summary,omitempty"` // the merger's report_done summary
+	MaxWorkers   int    `json:"max_workers,omitempty"`   // effective per-run concurrency cap
 
 	PendingGateKind string `json:"pending_gate_kind,omitempty"` // kind of the gate awaiting resolution, if any
 	PendingGateID   string `json:"pending_gate_id,omitempty"`   // id of that gate

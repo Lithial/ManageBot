@@ -39,7 +39,7 @@ func StartInProcessServerWithStore(t *testing.T) (string, *store.Store) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	srv := api.NewServer(s, sock)
+	srv := api.NewServer(s, sock, 0) // 0 ⇒ built-in default max workers
 	go func() { _ = srv.Serve() }()
 	t.Cleanup(func() { _ = srv.Close() })
 
