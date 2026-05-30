@@ -70,6 +70,57 @@ func TestFakeClaude_scriptEmitsRPC(t *testing.T) {
 	}
 }
 
+func TestFakeClaude_scriptDoneAndBlocked(t *testing.T) {
+	bin, err := testutil.LocateBinary("fake-claude")
+	if err != nil {
+		t.Skipf("fake-claude binary not built: %v", err)
+	}
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "script.jsonl")
+	lines := []string{
+		`{"kind":"done","summary":"finished task"}`,
+		`{"kind":"blocked","reason":"need input"}`,
+		`{"kind":"exit","code":0}`,
+	}
+	if err := os.WriteFile(scriptPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin)
+	cmd.Env = append(os.Environ(), "FAKE_CLAUDE_SCRIPT="+scriptPath)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	msgs, malformed, err := workerrpc.DecodeAll(bytes.NewReader(out))
+	if err != nil {
+		t.Fatalf("DecodeAll: %v", err)
+	}
+	if malformed != 0 {
+		t.Errorf("malformed = %d, want 0", malformed)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %+v", len(msgs), msgs)
+	}
+	done, err := workerrpc.AsDone(msgs[0])
+	if err != nil {
+		t.Fatalf("AsDone: %v", err)
+	}
+	if done.Summary != "finished task" {
+		t.Errorf("done.Summary = %q, want %q", done.Summary, "finished task")
+	}
+	blocked, err := workerrpc.AsBlocked(msgs[1])
+	if err != nil {
+		t.Fatalf("AsBlocked: %v", err)
+	}
+	if blocked.Reason != "need input" {
+		t.Errorf("blocked.Reason = %q, want %q", blocked.Reason, "need input")
+	}
+}
+
 func TestFakeClaude_scriptCustomExit(t *testing.T) {
 	bin, err := testutil.LocateBinary("fake-claude")
 	if err != nil {

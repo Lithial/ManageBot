@@ -12,6 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Phase 2 (FSM + planner phase) is on branch `phase-2-fsm-and-planner`: introduces `internal/fsm` (pure phase transitions), `internal/worktree` (git plumbing), `internal/workerrpc` (NDJSON protocol mirroring the planned MCP tool surface), `internal/supervisor` (one-shot subprocess + RPC collection), and `internal/orchestrator` (polling loop that drives `pending → planning → plan_gate`). The planner subprocess is configurable via `wrapd --planner-cmd`; integration tests point it at `fake-claude` with `--planner-env FAKE_CLAUDE_SCRIPT=...` and `--tick-interval 100ms`.
 
+Phase 3 (worker phase) is on branch `phase-3-worker-phase` (built atop phase 2): the orchestrator now drives `plan_gate → working → merging | failed`. New pieces: `internal/orchestrator/tasks.go` (parse + validate the plan's `tasks_json` DAG — unique ids, deps exist, acyclic), `scheduler.go` (pure DAG scheduler honoring a concurrency cap with transitive failure propagation, injectable `runTaskFunc`), `workers.go` (`driveWorkers`: a worktree + worker subprocess per task, outcome → terminal status, persisted `workers` rows), and `internal/store/workers.go`. Worker subprocess is configured via `wrapd --worker-cmd`/`--worker-env`/`--max-workers`; the happy path **terminates at `merging`** (the merger is Phase 4). See `docs/superpowers/plans/2026-05-30-phase-3-worker-phase.md`.
+
 ## Commands
 
 ```bash
@@ -71,6 +73,12 @@ The two helpers are intentionally distinct; don't unify them.
 - **`--planner-cmd` is bare path only in Phase 2.** No args support. Phase 9 will introduce a richer template with `--mcp wrap --append-system-prompt <planner.md>` args.
 - **Process-group kill for worker subprocesses.** `internal/supervisor` sets `SysProcAttr.Setpgid = true` and kills via `syscall.Kill(-pid, SIGKILL)` so shell-wrapper grandchildren don't leak pipe handles. POSIX-only; the project intentionally has no Windows target.
 - **Orchestrator writes plan BEFORE phase update.** In `drivePlanner`, `InsertPlan` runs before `UpdateRunPhase("plan_gate")`. Polling clients that condition on `phase == plan_gate` can rely on `plan_md` being present — there is no observable window where the phase has advanced but the plan is missing.
+- **`AutoAdvanceGates` is a Phase 3 scaffold, not the gate policy.** There is no gate engine until Phase 5, so the orchestrator only drives `plan_gate → working` when `--auto-advance-gates` is set; default off keeps runs resting at `plan_gate` (matching Phase 2 and the spec's `plan: require_approval` default). Phase 5 replaces this boolean with real per-run gate evaluation — delete it then.
+- **Worker worktrees/branches are RETAINED on every path.** `driveWorkers` never calls `worktree.Remove` — surviving worker branches are the merger's inputs (Phase 4), and the spec forbids deleting failed worktrees until `wrap prune`. This is the deliberate opposite of `drivePlanner`, which removes its worktree after persisting the plan.
+- **Worker terminal predicate lives in `interpretWorkerOutcome`.** `report_done` AND exit 0 → `done`; `report_blocked` → `failed` (blocked wins even if `report_done` was also emitted — it asked for human judgment); anything else (nonzero exit, or exit 0 without `report_done`) → `failed`. The daemon never parses worker stdout for meaning beyond these RPC methods.
+- **`max_workers` is a daemon flag (`--max-workers`, default 4), NOT a schema column yet.** The spec wants it per-run defaulted from project; deferred to avoid a migration. Phase 5 should move it into per-run config alongside gates.
+- **`git worktree add` is serialized** in `driveWorkers` via a mutex (repo-wide ref/index locks collide under parallel adds). Only the quick plumbing serializes; worker subprocesses still run concurrently under the cap.
+- **`store.Worker.ExitCode` is `*int64`**, not `int64` — exit code 0 (success) must be distinguishable from "not yet finished" (NULL). Contrast the `0 = unset` sentinel used for `PID`/`StartedAt`/`EndedAt`, where 0 is never a real value.
 
 ### Adapter-pattern intake
 

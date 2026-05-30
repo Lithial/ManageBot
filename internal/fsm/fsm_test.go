@@ -59,6 +59,12 @@ func TestAdvanceTransitions(t *testing.T) {
 		{"kill from working", fsm.PhaseWorking, fsm.EventKill, fsm.PhaseKilled, false},
 		{"kill from merging", fsm.PhaseMerging, fsm.EventKill, fsm.PhaseKilled, false},
 		{"kill from merge_gate", fsm.PhaseMergeGate, fsm.EventKill, fsm.PhaseKilled, false},
+		// Phase 3 transitions.
+		{"plan_gate->working on work_start", fsm.PhasePlanGate, fsm.EventWorkStart, fsm.PhaseWorking, false},
+		{"working->merging on work_done", fsm.PhaseWorking, fsm.EventWorkDone, fsm.PhaseMerging, false},
+		{"working->failed on work_failed", fsm.PhaseWorking, fsm.EventWorkFailed, fsm.PhaseFailed, false},
+		{"invalid: plan_gate->merging directly", fsm.PhasePlanGate, fsm.EventWorkDone, "", true},
+		{"invalid: working->working on work_start", fsm.PhaseWorking, fsm.EventWorkStart, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

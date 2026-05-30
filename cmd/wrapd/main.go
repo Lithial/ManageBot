@@ -44,8 +44,12 @@ func main() {
 	socket := flag.String("socket", defaultSocketPath(), "Unix socket path to listen on")
 	plannerCmd := flag.String("planner-cmd", "claude", "executable to spawn as the planner (Phase 2: bare path; future phases add args)")
 	plannerEnvFlag := flag.String("planner-env", "", "comma-separated KEY=VAL pairs to add to the planner's environment (test helper)")
+	workerCmd := flag.String("worker-cmd", "claude", "executable to spawn as each worker (Phase 3: bare path; future phases add args)")
+	workerEnvFlag := flag.String("worker-env", "", "comma-separated KEY=VAL pairs to add to each worker's environment (test helper)")
+	maxWorkers := flag.Int("max-workers", 4, "max simultaneous worker subprocesses per run")
+	autoAdvanceGates := flag.Bool("auto-advance-gates", false, "auto-advance plan_gate into the working phase without approval (Phase 3 scaffold; Phase 5 adds the real gate engine)")
 	tickInterval := flag.Duration("tick-interval", 500*time.Millisecond, "orchestrator poll interval")
-	stepTimeout := flag.Duration("step-timeout", 5*time.Minute, "per-step timeout for planner subprocess (planner kill budget)")
+	stepTimeout := flag.Duration("step-timeout", 5*time.Minute, "per-step timeout for a planner/worker subprocess (kill budget)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*stateDir, 0o700); err != nil {
@@ -73,6 +77,7 @@ func main() {
 	}
 
 	plannerEnv := parseEnvFlag(*plannerEnvFlag)
+	workerEnv := parseEnvFlag(*workerEnvFlag)
 	orch := orchestrator.New(orchestrator.Config{
 		Store:    s,
 		StateDir: *stateDir,
@@ -83,7 +88,16 @@ func main() {
 			}
 			return c
 		},
-		StepTimeout: *stepTimeout,
+		WorkerCmd: func(_ string) *exec.Cmd {
+			c := exec.Command(*workerCmd)
+			if len(workerEnv) > 0 {
+				c.Env = append(os.Environ(), workerEnv...)
+			}
+			return c
+		},
+		MaxWorkers:       *maxWorkers,
+		AutoAdvanceGates: *autoAdvanceGates,
+		StepTimeout:      *stepTimeout,
 	})
 	orchCtx, orchCancel := context.WithCancel(context.Background())
 	go orch.Run(orchCtx, *tickInterval)
