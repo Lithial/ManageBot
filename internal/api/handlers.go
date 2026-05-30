@@ -113,9 +113,11 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := intake.GetRunResponse{
-		RunID:     run.ID,
-		ProjectID: run.ProjectID,
-		Phase:     run.Phase,
+		RunID:      run.ID,
+		ProjectID:  run.ProjectID,
+		Phase:      run.Phase,
+		IntakeKind: run.IntakeKind,
+		IntakeRef:  run.IntakeRef,
 	}
 	plan, err := s.store.GetPlanByRun(ctx, id)
 	if err == nil {
