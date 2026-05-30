@@ -88,14 +88,22 @@ func (c *Client) GetRun(ctx context.Context, id string) (intake.GetRunResponse, 
 	return out, nil
 }
 
-// Approve resolves the run's current pending gate as approved.
+// Approve resolves the run's current pending gate as approved (default action).
 func (c *Client) Approve(ctx context.Context, runID, by string) (intake.ResolveGateResponse, error) {
-	return c.resolveGate(ctx, runID, "approve", by)
+	return c.postResolve(ctx, runID, "approve", "", "", by)
 }
 
-// Reject resolves the run's current pending gate as rejected.
+// Reject resolves the run's current pending gate as rejected (default action).
 func (c *Client) Reject(ctx context.Context, runID, by string) (intake.ResolveGateResponse, error) {
-	return c.resolveGate(ctx, runID, "reject", by)
+	return c.postResolve(ctx, runID, "reject", "", "", by)
+}
+
+// Resolve resolves the run's current pending gate with an explicit decision
+// (approve|reject) and a typed action (e.g. drop_branch, retry, takeover). It
+// targets POST /runs/{id}/resolve for the cases that are neither a plain approve
+// nor reject.
+func (c *Client) Resolve(ctx context.Context, runID, decision, action, by string) (intake.ResolveGateResponse, error) {
+	return c.postResolve(ctx, runID, "resolve", decision, action, by)
 }
 
 // Kill moves a run to the terminal killed phase.
@@ -121,17 +129,20 @@ func (c *Client) Kill(ctx context.Context, runID string) (intake.KillResponse, e
 	return out, nil
 }
 
-func (c *Client) resolveGate(ctx context.Context, runID, action, by string) (intake.ResolveGateResponse, error) {
-	body, err := json.Marshal(intake.ResolveGateRequest{By: by})
+// postResolve POSTs a gate resolution to /runs/{id}/{verb} (verb ∈
+// approve|reject|resolve), carrying an optional decision (for the resolve verb)
+// and typed action.
+func (c *Client) postResolve(ctx context.Context, runID, verb, decision, action, by string) (intake.ResolveGateResponse, error) {
+	body, err := json.Marshal(intake.ResolveGateRequest{By: by, Action: action, Decision: decision})
 	if err != nil {
 		return intake.ResolveGateResponse{}, err
 	}
-	url := "http://wrap/runs/" + runID + "/" + action
+	url := "http://wrap/runs/" + runID + "/" + verb
 	httpReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return intake.ResolveGateResponse{}, fmt.Errorf("%s gate: %w", action, err)
+		return intake.ResolveGateResponse{}, fmt.Errorf("%s gate: %w", verb, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
@@ -139,7 +150,7 @@ func (c *Client) resolveGate(ctx context.Context, runID, action, by string) (int
 	}
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
-		return intake.ResolveGateResponse{}, fmt.Errorf("%s gate: status %d: %s", action, resp.StatusCode, raw)
+		return intake.ResolveGateResponse{}, fmt.Errorf("%s gate: status %d: %s", verb, resp.StatusCode, raw)
 	}
 	var out intake.ResolveGateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {

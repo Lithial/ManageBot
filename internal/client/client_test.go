@@ -50,6 +50,28 @@ func TestClientApprove(t *testing.T) {
 	}
 }
 
+func TestClientResolve(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := client.New(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "merging"})
+	_, _ = st.InsertGate(ctx, store.Gate{RunID: rid, Kind: "merge_conflict", PayloadJSON: "{}"})
+
+	resp, err := c.Resolve(ctx, rid, "approve", "drop_branch", "bob")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resp.Status != "approved" {
+		t.Errorf("resp = %+v", resp)
+	}
+	g, _ := st.LatestGateByKind(ctx, rid, "merge_conflict")
+	if g.Status != "approved" || g.Action != "drop_branch" || g.ResolvedBy != "bob" {
+		t.Errorf("gate = %+v", g)
+	}
+}
+
 func TestClientReject_noPendingGate(t *testing.T) {
 	sock, st := testutil.StartInProcessServerWithStore(t)
 	c := client.New(sock)
