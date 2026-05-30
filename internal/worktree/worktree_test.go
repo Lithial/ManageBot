@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Lithial/ManageBot/internal/testutil"
@@ -51,6 +52,65 @@ func TestManager_AddRemove(t *testing.T) {
 	}
 	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
 		t.Errorf("worktree path still exists after Remove: err=%v", err)
+	}
+}
+
+func TestManager_PruneRun(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	stateDir := t.TempDir()
+	m := worktree.NewManager(stateDir)
+	ctx := context.Background()
+
+	// Two live worker worktrees plus a planner worktree we remove up-front to
+	// mimic production (the planner worktree is gone but its branch lingers).
+	add := func(branch, subpath string) worktree.Worktree {
+		wt, err := m.Add(ctx, worktree.AddRequest{RepoPath: repo, Branch: branch, BaseRef: "main", Subpath: subpath})
+		if err != nil {
+			t.Fatalf("Add %s: %v", branch, err)
+		}
+		return wt
+	}
+	w1 := add("wrap/run1/w1", "runs/run1/w1")
+	w2 := add("wrap/run1/w2", "runs/run1/w2")
+	planWt := add("wrap/run1/plan", "runs/run1/plan")
+	if err := m.Remove(ctx, repo, planWt.Path); err != nil {
+		t.Fatalf("pre-remove planner worktree: %v", err)
+	}
+
+	// Hand PruneRun the (now-missing) planner worktree path too, to prove it
+	// tolerates it. Branches include the planner branch, which still exists.
+	worktrees := []string{w1.Path, w2.Path, planWt.Path}
+	branches := []string{"wrap/run1/w1", "wrap/run1/w2", "wrap/run1/plan"}
+	removed, deleted, err := m.PruneRun(ctx, repo, worktrees, branches)
+	if err != nil {
+		t.Fatalf("PruneRun: %v", err)
+	}
+	if removed != 2 {
+		t.Errorf("worktreesRemoved = %d, want 2 (planner worktree already gone)", removed)
+	}
+	if deleted != 3 {
+		t.Errorf("branchesDeleted = %d, want 3", deleted)
+	}
+	for _, p := range []string{w1.Path, w2.Path} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("worktree %s still exists after prune: err=%v", p, err)
+		}
+	}
+	out, err := exec.Command("git", "-C", repo, "branch", "--list", "wrap/run1/*").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git branch --list: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "" {
+		t.Errorf("wrap/run1/* branches remain after prune: %q", out)
+	}
+
+	// Idempotent: a second prune over the same inputs is a no-op, not an error.
+	removed2, deleted2, err := m.PruneRun(ctx, repo, worktrees, branches)
+	if err != nil {
+		t.Fatalf("second PruneRun: %v", err)
+	}
+	if removed2 != 0 || deleted2 != 0 {
+		t.Errorf("second prune removed=%d deleted=%d, want 0/0", removed2, deleted2)
 	}
 }
 

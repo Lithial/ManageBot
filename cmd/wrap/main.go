@@ -33,7 +33,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: wrap <command> [args...]\ncommands: run, submit, github, emit, approve, reject, resolve, kill, tui, attach")
+		return errors.New("usage: wrap <command> [args...]\ncommands: run, submit, github, emit, approve, reject, resolve, kill, prune, tui, attach")
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -57,6 +57,8 @@ func run(args []string) error {
 		return cmdEmit(rest)
 	case "kill":
 		return cmdKill(rest)
+	case "prune":
+		return cmdPrune(rest)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
@@ -73,6 +75,26 @@ func cmdKill(args []string) error {
 		return errors.New("usage: wrap kill [--socket PATH] <run-id>")
 	}
 	resp, err := client.New(*socket).Kill(context.Background(), fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	out, _ := json.MarshalIndent(resp, "", "  ")
+	fmt.Println(string(out))
+	return nil
+}
+
+// cmdPrune implements `wrap prune <run-id>`, destructively cleaning up a
+// terminal run's git worktrees and branches.
+func cmdPrune(args []string) error {
+	fs := flag.NewFlagSet("prune", flag.ContinueOnError)
+	socket := fs.String("socket", defaultSocketPath(), "wrapd Unix socket path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: wrap prune [--socket PATH] <run-id>")
+	}
+	resp, err := client.New(*socket).PruneRun(context.Background(), fs.Arg(0))
 	if err != nil {
 		return err
 	}

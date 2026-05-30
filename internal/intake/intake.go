@@ -79,6 +79,14 @@ type KillResponse struct {
 	Phase string `json:"phase"` // "killed"
 }
 
+// PruneRunResponse is the body of a successful POST /runs/{id}/prune. The counts
+// report how many worktrees were removed and branches deleted.
+type PruneRunResponse struct {
+	RunID            string `json:"run_id"`
+	WorktreesRemoved int    `json:"worktrees_removed"`
+	BranchesDeleted  int    `json:"branches_deleted"`
+}
+
 // WorkerTaskResponse is the body of GET /workers/{id}/task (the wrap.read_task tool).
 type WorkerTaskResponse struct {
 	TaskID      string `json:"task_id"`

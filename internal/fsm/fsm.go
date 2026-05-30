@@ -58,6 +58,14 @@ var terminalPhases = map[Phase]struct{}{
 	PhaseKilled: {},
 }
 
+// IsTerminal reports whether p is a terminal phase (done | failed | killed) —
+// one that never transitions out. `wrap prune` uses this to gate destructive
+// cleanup to runs that have stopped moving.
+func IsTerminal(p Phase) bool {
+	_, ok := terminalPhases[p]
+	return ok
+}
+
 // transitions[from][event] = to
 var transitions = map[Phase]map[Event]Phase{
 	PhasePending: {

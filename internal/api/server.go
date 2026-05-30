@@ -12,11 +12,21 @@ import (
 	"github.com/Lithial/ManageBot/internal/store"
 )
 
+// Pruner performs the destructive git cleanup for a terminal run (remove
+// worktrees, delete branches, record the `pruned` event). The orchestrator
+// implements it — it owns the worktree manager and the serialization mutex — so
+// the thin API layer stays out of git plumbing. It returns store.ErrNotFound for
+// an unknown run and store.ErrRunNotTerminal when the run is not yet terminal.
+type Pruner interface {
+	PruneRun(ctx context.Context, runID string) (worktreesRemoved, branchesDeleted int, err error)
+}
+
 type Server struct {
 	store      *store.Store
 	socketPath string
 	httpSrv    *http.Server
 	readyCh    chan struct{}
+	pruner     Pruner
 }
 
 func NewServer(s *store.Store, socketPath string) *Server {
@@ -29,6 +39,11 @@ func NewServer(s *store.Store, socketPath string) *Server {
 	}
 	return srv
 }
+
+// SetPruner injects the Pruner that POST /runs/{id}/prune delegates to. wrapd
+// calls it once the orchestrator is built. When unset (e.g. the in-process test
+// server), the prune endpoint reports it is unavailable.
+func (s *Server) SetPruner(p Pruner) { s.pruner = p }
 
 // Ready returns a channel that is closed once the server's Unix socket is
 // bound and ready to accept connections.

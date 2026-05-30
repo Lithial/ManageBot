@@ -5,10 +5,12 @@ package worktree
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // Manager creates worktrees rooted under a state directory (typically
@@ -55,6 +57,67 @@ func (m *Manager) Add(ctx context.Context, req AddRequest) (Worktree, error) {
 		return Worktree{}, fmt.Errorf("git worktree add: %w\n%s", err, out)
 	}
 	return Worktree{Path: wtPath, Branch: req.Branch}, nil
+}
+
+// PruneRun is the destructive cleanup behind `wrap prune`: it removes each of
+// the given worktrees and deletes each of the given branches from repoPath. It
+// is deliberately narrow — it only ever runs `git worktree remove --force` and
+// `git branch -D` on the exact paths/branches it is handed (the caller derives
+// these from one run's worker rows), never `rm -rf` and never a wildcard.
+//
+// It is idempotent so a partial prune can be retried safely: worktree paths that
+// no longer exist on disk are skipped (e.g. the planner worktree, already
+// removed after planning), and branches that are already gone are tolerated.
+// Worktrees are removed before branches because a branch checked out in a
+// worktree cannot be deleted. The returned counts are the worktrees actually
+// removed and the branches actually deleted; a non-nil error joins every hard
+// failure encountered (all removals are still attempted).
+func (m *Manager) PruneRun(ctx context.Context, repoPath string, worktrees, branches []string) (worktreesRemoved, branchesDeleted int, err error) {
+	var errs []error
+	for _, wt := range worktrees {
+		if wt == "" {
+			continue
+		}
+		// Tolerate an already-removed worktree (idempotent re-prune): if the path
+		// is gone there is nothing to remove.
+		if _, statErr := os.Stat(wt); os.IsNotExist(statErr) {
+			continue
+		}
+		cmd := exec.CommandContext(ctx, "git", "worktree", "remove", "--force", wt)
+		cmd.Dir = repoPath
+		if out, rmErr := cmd.CombinedOutput(); rmErr != nil {
+			errs = append(errs, fmt.Errorf("git worktree remove %s: %w\n%s", wt, rmErr, out))
+			continue
+		}
+		worktreesRemoved++
+	}
+	// Clear any stale worktree admin entries (e.g. a worktree whose directory was
+	// removed out-of-band) so the branch deletes below don't trip on "used by
+	// worktree".
+	prune := exec.CommandContext(ctx, "git", "worktree", "prune")
+	prune.Dir = repoPath
+	if out, pErr := prune.CombinedOutput(); pErr != nil {
+		errs = append(errs, fmt.Errorf("git worktree prune: %w\n%s", pErr, out))
+	}
+	for _, br := range branches {
+		if br == "" {
+			continue
+		}
+		cmd := exec.CommandContext(ctx, "git", "branch", "-D", br)
+		cmd.Dir = repoPath
+		out, brErr := cmd.CombinedOutput()
+		if brErr != nil {
+			// An already-deleted branch is fine (idempotent re-prune); anything else
+			// is a real failure.
+			if strings.Contains(string(out), "not found") {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("git branch -D %s: %w\n%s", br, brErr, out))
+			continue
+		}
+		branchesDeleted++
+	}
+	return worktreesRemoved, branchesDeleted, errors.Join(errs...)
 }
 
 // Remove runs `git worktree remove --force <path>` against the given repo.

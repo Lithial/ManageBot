@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/Lithial/ManageBot/internal/fsm"
@@ -67,6 +68,10 @@ type Orchestrator struct {
 	cfg   Config
 	wt    *worktree.Manager
 	kills *cancelRegistry
+	// wtMu serializes git worktree plumbing (add/remove/prune): these take
+	// repo-wide ref/index locks that collide under concurrency. Worker
+	// subprocesses still run in parallel — only the quick plumbing is serialized.
+	wtMu sync.Mutex
 }
 
 func New(cfg Config) *Orchestrator {

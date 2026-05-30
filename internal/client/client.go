@@ -129,6 +129,31 @@ func (c *Client) Kill(ctx context.Context, runID string) (intake.KillResponse, e
 	return out, nil
 }
 
+// PruneRun destructively cleans up a terminal run's git worktrees and branches.
+// Returns ErrNotFound for an unknown run; the server returns 409 for a run that
+// is not yet terminal.
+func (c *Client) PruneRun(ctx context.Context, runID string) (intake.PruneRunResponse, error) {
+	url := "http://wrap/runs/" + runID + "/prune"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return intake.PruneRunResponse{}, fmt.Errorf("prune: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return intake.PruneRunResponse{}, fmt.Errorf("run %q: %w", runID, ErrNotFound)
+	}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return intake.PruneRunResponse{}, fmt.Errorf("prune: status %d: %s", resp.StatusCode, raw)
+	}
+	var out intake.PruneRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return intake.PruneRunResponse{}, fmt.Errorf("decode response: %w", err)
+	}
+	return out, nil
+}
+
 // postResolve POSTs a gate resolution to /runs/{id}/{verb} (verb ∈
 // approve|reject|resolve), carrying an optional decision (for the resolve verb)
 // and typed action.

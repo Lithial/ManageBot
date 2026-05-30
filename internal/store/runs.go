@@ -13,6 +13,10 @@ import (
 // ErrNotFound is returned when a requested entity does not exist in the store.
 var ErrNotFound = errors.New("not found")
 
+// ErrRunNotTerminal is returned by destructive run operations (e.g. prune) that
+// require the run to be in a terminal phase (done | failed | killed) first.
+var ErrRunNotTerminal = errors.New("run is not terminal")
+
 // scanProject scans a single projects row into a Project value, converting
 // the nullable verification_command column into a plain string.
 func scanProject(row *sql.Row) (Project, error) {
