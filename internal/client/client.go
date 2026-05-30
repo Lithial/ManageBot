@@ -70,6 +70,43 @@ func (c *Client) GetRun(ctx context.Context, id string) (intake.GetRunResponse, 
 	return out, nil
 }
 
+// Approve resolves the run's current pending gate as approved.
+func (c *Client) Approve(ctx context.Context, runID, by string) (intake.ResolveGateResponse, error) {
+	return c.resolveGate(ctx, runID, "approve", by)
+}
+
+// Reject resolves the run's current pending gate as rejected.
+func (c *Client) Reject(ctx context.Context, runID, by string) (intake.ResolveGateResponse, error) {
+	return c.resolveGate(ctx, runID, "reject", by)
+}
+
+func (c *Client) resolveGate(ctx context.Context, runID, action, by string) (intake.ResolveGateResponse, error) {
+	body, err := json.Marshal(intake.ResolveGateRequest{By: by})
+	if err != nil {
+		return intake.ResolveGateResponse{}, err
+	}
+	url := "http://wrap/runs/" + runID + "/" + action
+	httpReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return intake.ResolveGateResponse{}, fmt.Errorf("%s gate: %w", action, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return intake.ResolveGateResponse{}, fmt.Errorf("run %q: %w", runID, ErrNotFound)
+	}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return intake.ResolveGateResponse{}, fmt.Errorf("%s gate: status %d: %s", action, resp.StatusCode, raw)
+	}
+	var out intake.ResolveGateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return intake.ResolveGateResponse{}, fmt.Errorf("decode response: %w", err)
+	}
+	return out, nil
+}
+
 func (c *Client) SubmitRun(ctx context.Context, req intake.SubmitRunRequest) (intake.SubmitRunResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {

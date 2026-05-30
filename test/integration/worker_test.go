@@ -17,12 +17,12 @@ import (
 	"github.com/Lithial/ManageBot/internal/testutil"
 )
 
-// TestFullRunHappyPath exercises the full path end-to-end through the real
-// wrapd binary: pending → planning → plan_gate → working → merging → merge_gate
-// → done. Planner, workers, and merger are all fake-claude, each driven by its
-// own script via a distinct FAKE_CLAUDE_SCRIPT in --planner-env/--worker-env/
-// --merger-env.
-func TestFullRunHappyPath(t *testing.T) {
+// TestGateApprovalFlow exercises the full path end-to-end through the real wrapd
+// binary with the default require_approval gates: pending → planning → plan_gate
+// → (approve) → working → merging → merge_gate → (approve) → done. Planner,
+// workers, and merger are all fake-claude; the two gates are resolved via the
+// `wrap approve` CLI.
+func TestGateApprovalFlow(t *testing.T) {
 	wrapdBin, err := testutil.LocateBinary("wrapd")
 	if err != nil {
 		t.Fatalf("locate wrapd: %v (did you run `make wrapd`?)", err)
@@ -78,7 +78,6 @@ func TestFullRunHappyPath(t *testing.T) {
 		"--worker-env", "FAKE_CLAUDE_SCRIPT="+workerScript,
 		"--merger-cmd", fakeClaude,
 		"--merger-env", "FAKE_CLAUDE_SCRIPT="+mergerScript,
-		"--auto-advance-gates",
 		"--tick-interval", "100ms",
 	)
 
@@ -92,38 +91,68 @@ func TestFullRunHappyPath(t *testing.T) {
 	}
 
 	httpc := socketHTTPClient(d.SocketPath)
+
+	// Default project gates are require_approval: the run holds at the plan gate.
+	got := waitForPhase(t, httpc, submit.RunID, "plan_gate")
+	if got.PendingGateKind != "plan" {
+		t.Errorf("PendingGateKind = %q, want plan", got.PendingGateKind)
+	}
+	wrapResolve(t, wrapBin, d.SocketPath, "approve", submit.RunID)
+
+	// Approval lets it run through to the merge gate, where it holds again.
+	got = waitForPhase(t, httpc, submit.RunID, "merge_gate")
+	if got.PendingGateKind != "merge" {
+		t.Errorf("PendingGateKind = %q, want merge", got.PendingGateKind)
+	}
+	wrapResolve(t, wrapBin, d.SocketPath, "approve", submit.RunID)
+
+	got = waitForPhase(t, httpc, submit.RunID, "done")
+	if !strings.Contains(got.MergeSummary, "merged all worker branches") {
+		t.Errorf("MergeSummary = %q, want the merger's summary", got.MergeSummary)
+	}
+	if !strings.Contains(got.MergeBranch, "/merge") {
+		t.Errorf("MergeBranch = %q, want a wrap/<run>/merge branch", got.MergeBranch)
+	}
+}
+
+// waitForPhase polls GET /runs/{id} until the run reaches `want`, failing the
+// test if it reaches an unwanted terminal phase or times out.
+func waitForPhase(t *testing.T, httpc *http.Client, runID, want string) intake.GetRunResponse {
+	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	var got intake.GetRunResponse
 	for time.Now().Before(deadline) {
-		resp, err := httpc.Get("http://wrap/runs/" + submit.RunID)
+		resp, err := httpc.Get("http://wrap/runs/" + runID)
 		if err != nil {
 			t.Fatalf("get run: %v", err)
 		}
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			t.Fatalf("GET /runs/%s: status %d, body: %s", submit.RunID, resp.StatusCode, body)
+			t.Fatalf("GET /runs/%s: status %d, body: %s", runID, resp.StatusCode, body)
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 			resp.Body.Close()
 			t.Fatalf("decode get-run response: %v", err)
 		}
 		resp.Body.Close()
-		if got.Phase == "done" {
-			break
+		if got.Phase == want {
+			return got
 		}
-		if got.Phase == "failed" {
-			t.Fatalf("run failed unexpectedly: %+v", got)
+		if (got.Phase == "failed" || got.Phase == "done") && got.Phase != want {
+			t.Fatalf("run reached %q while waiting for %q: %+v", got.Phase, want, got)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
-	if got.Phase != "done" {
-		t.Fatalf("phase = %q after wait, want done (response: %+v)", got.Phase, got)
-	}
-	if !strings.Contains(got.MergeSummary, "merged all worker branches") {
-		t.Errorf("MergeSummary = %q, want the merger's summary", got.MergeSummary)
-	}
-	if !strings.Contains(got.MergeBranch, "/merge") {
-		t.Errorf("MergeBranch = %q, want a wrap/<run>/merge branch", got.MergeBranch)
+	t.Fatalf("phase = %q after wait, want %q (response: %+v)", got.Phase, want, got)
+	return got
+}
+
+// wrapResolve runs `wrap approve|reject <run-id>` against the daemon socket.
+func wrapResolve(t *testing.T, wrapBin, socket, action, runID string) {
+	t.Helper()
+	out, err := exec.Command(wrapBin, action, "--socket", socket, runID).CombinedOutput()
+	if err != nil {
+		t.Fatalf("wrap %s: %v\noutput: %s", action, err, out)
 	}
 }

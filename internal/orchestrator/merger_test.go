@@ -24,7 +24,7 @@ func seedMergingRun(t *testing.T, st *store.Store, repo string, survivors int) s
 	if err != nil {
 		t.Fatal(err)
 	}
-	rid, err := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "spec", GatesJSON: "{}"})
+	rid, err := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "spec", GatesJSON: autoGatesJSON})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,9 +54,8 @@ func seedMergingRun(t *testing.T, st *store.Store, repo string, survivors int) s
 func newMergerOrch(t *testing.T, st *store.Store, stateDir, fakeClaude, scriptPath string) *orchestrator.Orchestrator {
 	t.Helper()
 	return orchestrator.New(orchestrator.Config{
-		Store:            st,
-		StateDir:         stateDir,
-		AutoAdvanceGates: true,
+		Store:    st,
+		StateDir: stateDir,
 		MergerCmd: func(_ string) *exec.Cmd {
 			c := exec.Command(fakeClaude)
 			c.Env = append(os.Environ(), "FAKE_CLAUDE_SCRIPT="+scriptPath)
@@ -147,8 +146,8 @@ func TestTick_merging_restsWhenNoMergerCmd(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	rid := seedMergingRun(t, st, repo, 1)
-	// AutoAdvanceGates on, but no MergerCmd: the run must rest at merging.
-	o := orchestrator.New(orchestrator.Config{Store: st, StateDir: stateDir, AutoAdvanceGates: true})
+	// No MergerCmd: the run must rest at merging regardless of gate policy.
+	o := orchestrator.New(orchestrator.Config{Store: st, StateDir: stateDir})
 	if err := o.Tick(context.Background()); err != nil {
 		t.Fatalf("Tick: %v", err)
 	}

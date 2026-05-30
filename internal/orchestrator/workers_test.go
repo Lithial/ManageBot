@@ -14,17 +14,22 @@ import (
 	"github.com/Lithial/ManageBot/internal/testutil"
 )
 
-// seedPlanGateRun creates a project + run, persists a plan with the given
-// tasks_json, and moves the run to plan_gate — the starting point for the
-// worker phase.
-func seedPlanGateRun(t *testing.T, st *store.Store, repo, tasksJSON string) string {
+// autoGatesJSON resolves both the plan and merge gates automatically, so tests
+// that focus on the worker/merger phases flow straight through without an
+// approval step.
+const autoGatesJSON = `{"plan":{"mode":"auto"},"merge":{"mode":"auto"}}`
+
+// seedPlanGateRun creates a project + run with the given gates_json, persists a
+// plan with the given tasks_json, and moves the run to plan_gate — the starting
+// point for the worker phase.
+func seedPlanGateRun(t *testing.T, st *store.Store, repo, tasksJSON, gatesJSON string) string {
 	t.Helper()
 	ctx := context.Background()
 	pid, err := st.InsertProject(ctx, store.Project{Name: "proj", RepoPath: repo, DefaultGatesJSON: "{}"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rid, err := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "spec", GatesJSON: "{}"})
+	rid, err := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "spec", GatesJSON: gatesJSON})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +58,9 @@ func workerScript(t *testing.T, dir, name string, lines ...string) string {
 func newWorkerOrch(t *testing.T, st *store.Store, stateDir, fakeClaude, scriptPath string, maxWorkers int) *orchestrator.Orchestrator {
 	t.Helper()
 	return orchestrator.New(orchestrator.Config{
-		Store:            st,
-		StateDir:         stateDir,
-		AutoAdvanceGates: true,
-		MaxWorkers:       maxWorkers,
+		Store:      st,
+		StateDir:   stateDir,
+		MaxWorkers: maxWorkers,
 		WorkerCmd: func(taskDesc string) *exec.Cmd {
 			c := exec.Command(fakeClaude)
 			c.Env = append(os.Environ(), "FAKE_CLAUDE_SCRIPT="+scriptPath)
@@ -80,7 +84,7 @@ func TestTick_planGateToMerging_allWorkersDone(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	rid := seedPlanGateRun(t, st, repo,
-		`[{"id":"t1","title":"first"},{"id":"t2","title":"second","depends_on":["t1"]}]`)
+		`[{"id":"t1","title":"first"},{"id":"t2","title":"second","depends_on":["t1"]}]`, autoGatesJSON)
 
 	script := workerScript(t, stateDir, "worker.jsonl",
 		`{"kind":"progress","msg":"working"}`,
@@ -124,7 +128,7 @@ func TestTick_workerPhaseRecordsWorkerDoneEvents(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	rid := seedPlanGateRun(t, st, repo, `[{"id":"t1","title":"only"}]`)
+	rid := seedPlanGateRun(t, st, repo, `[{"id":"t1","title":"only"}]`, autoGatesJSON)
 	script := workerScript(t, stateDir, "worker.jsonl",
 		`{"kind":"done","summary":"shipped t1"}`,
 		`{"kind":"exit","code":0}`,
@@ -168,7 +172,7 @@ func TestTick_planGateToFailed_workerExitsNonZero(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	rid := seedPlanGateRun(t, st, repo, `[{"id":"t1","title":"only"}]`)
+	rid := seedPlanGateRun(t, st, repo, `[{"id":"t1","title":"only"}]`, autoGatesJSON)
 	// Worker exits non-zero without report_done -> failed.
 	script := workerScript(t, stateDir, "fail.jsonl", `{"kind":"exit","code":2}`)
 	o := newWorkerOrch(t, st, stateDir, fakeClaude, script, 4)
@@ -183,7 +187,7 @@ func TestTick_planGateToFailed_workerExitsNonZero(t *testing.T) {
 	}
 }
 
-func TestTick_planGate_notAdvancedWhenAutoAdvanceOff(t *testing.T) {
+func TestTick_planGate_holdsOnRequireApproval(t *testing.T) {
 	repo := testutil.InitGitRepo(t)
 	stateDir := t.TempDir()
 	st, err := store.Open(context.Background(), filepath.Join(stateDir, "wrap.db"))
@@ -192,14 +196,29 @@ func TestTick_planGate_notAdvancedWhenAutoAdvanceOff(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	rid := seedPlanGateRun(t, st, repo, `[{"id":"t1","title":"only"}]`)
-	// AutoAdvanceGates defaults to false; no WorkerCmd configured.
+	// require_approval plan gate: the run must hold at plan_gate with a pending
+	// gate, even across multiple ticks, until a human resolves it.
+	rid := seedPlanGateRun(t, st, repo, `[{"id":"t1","title":"only"}]`, `{"plan":{"mode":"require_approval"}}`)
 	o := orchestrator.New(orchestrator.Config{Store: st, StateDir: stateDir})
-	if err := o.Tick(context.Background()); err != nil {
-		t.Fatalf("Tick: %v", err)
+	for i := 0; i < 2; i++ {
+		if err := o.Tick(context.Background()); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
 	}
 	got, _ := st.GetRun(context.Background(), rid)
 	if got.Phase != "plan_gate" {
-		t.Errorf("phase = %q, want plan_gate (run should rest at the gate)", got.Phase)
+		t.Errorf("phase = %q, want plan_gate (run should hold at the gate)", got.Phase)
+	}
+	g, err := st.PendingGateByRun(context.Background(), rid)
+	if err != nil {
+		t.Fatalf("PendingGateByRun: %v", err)
+	}
+	if g.Kind != "plan" {
+		t.Errorf("pending gate kind = %q, want plan", g.Kind)
+	}
+	// Idempotent: only one plan gate created across the two ticks.
+	gs, _ := st.ListGatesByRun(context.Background(), rid)
+	if len(gs) != 1 {
+		t.Errorf("created %d gates across 2 ticks, want 1 (idempotent)", len(gs))
 	}
 }

@@ -49,7 +49,6 @@ func main() {
 	mergerCmd := flag.String("merger-cmd", "claude", "executable to spawn as the merger (Phase 4: bare path; future phases add args)")
 	mergerEnvFlag := flag.String("merger-env", "", "comma-separated KEY=VAL pairs to add to the merger's environment (test helper)")
 	maxWorkers := flag.Int("max-workers", 4, "max simultaneous worker subprocesses per run")
-	autoAdvanceGates := flag.Bool("auto-advance-gates", false, "auto-advance plan_gate into the working phase without approval (Phase 3 scaffold; Phase 5 adds the real gate engine)")
 	tickInterval := flag.Duration("tick-interval", 500*time.Millisecond, "orchestrator poll interval")
 	stepTimeout := flag.Duration("step-timeout", 5*time.Minute, "per-step timeout for a planner/worker subprocess (kill budget)")
 	flag.Parse()
@@ -105,9 +104,8 @@ func main() {
 			}
 			return c
 		},
-		MaxWorkers:       *maxWorkers,
-		AutoAdvanceGates: *autoAdvanceGates,
-		StepTimeout:      *stepTimeout,
+		MaxWorkers:  *maxWorkers,
+		StepTimeout: *stepTimeout,
 	})
 	orchCtx, orchCancel := context.WithCancel(context.Background())
 	go orch.Run(orchCtx, *tickInterval)

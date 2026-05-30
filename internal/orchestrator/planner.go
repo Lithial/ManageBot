@@ -120,6 +120,12 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
 		return fmt.Errorf("insert plan: %w", err)
 	}
+	// Open the plan gate before advancing, so phase==plan_gate always has both
+	// the plan and the gate present.
+	if err := o.openGate(ctx, r, "plan"); err != nil {
+		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
+		return fmt.Errorf("open plan gate: %w", err)
+	}
 	nextPhase, _ := fsm.Advance(fsm.PhasePlanning, fsm.EventPlanDone)
 	if err := o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(nextPhase)); err != nil {
 		return fmt.Errorf("update run phase plan_gate: %w", err)

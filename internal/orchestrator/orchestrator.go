@@ -45,12 +45,6 @@ type Config struct {
 
 	// MaxWorkers caps simultaneous worker subprocesses per run (default 4).
 	MaxWorkers int
-
-	// AutoAdvanceGates drives plan_gate runs straight into the working phase
-	// without human approval. Phase 3 scaffold: there is no gate engine yet
-	// (Phase 5), so this crude boolean stands in for gates.plan.mode == "auto".
-	// Default false keeps runs resting at plan_gate, matching Phase 2.
-	AutoAdvanceGates bool
 }
 
 type Orchestrator struct {
@@ -65,57 +59,39 @@ func New(cfg Config) *Orchestrator {
 	}
 }
 
-// Tick runs one orchestration pass: advance every pending run by one
-// planner phase. Errors on individual runs are logged but do not stop
-// other runs in the same pass.
+// Tick runs one orchestration pass, advancing each non-terminal run by one
+// step: pending→plan via the planner, plan_gate and merge_gate via the gate
+// engine, and merging via the merger. Errors on individual runs are logged but
+// do not stop other runs in the same pass.
 func (o *Orchestrator) Tick(ctx context.Context) error {
-	pending, err := o.cfg.Store.ListRunsByPhase(ctx, string(fsm.PhasePending))
+	// Ordered so a run created this tick can progress as far as its gates allow.
+	if err := o.driveByPhase(ctx, fsm.PhasePending, o.drivePlanner); err != nil {
+		return err
+	}
+	if err := o.driveByPhase(ctx, fsm.PhasePlanGate, o.drivePlanGate); err != nil {
+		return err
+	}
+	// Merging is automatic work, not a gate; driveMerger self-guards when no
+	// MergerCmd is configured (the run rests at merging).
+	if err := o.driveByPhase(ctx, fsm.PhaseMerging, o.driveMerger); err != nil {
+		return err
+	}
+	if err := o.driveByPhase(ctx, fsm.PhaseMergeGate, o.driveMergeGate); err != nil {
+		return err
+	}
+	return nil
+}
+
+// driveByPhase applies `drive` to every run currently in `phase`. A per-run
+// error is logged and does not abort the pass; only a list failure propagates.
+func (o *Orchestrator) driveByPhase(ctx context.Context, phase fsm.Phase, drive func(context.Context, store.Run) error) error {
+	runs, err := o.cfg.Store.ListRunsByPhase(ctx, string(phase))
 	if err != nil {
-		return fmt.Errorf("list pending: %w", err)
+		return fmt.Errorf("list %s: %w", phase, err)
 	}
-	for _, r := range pending {
-		if err := o.drivePlanner(ctx, r); err != nil {
-			log.Printf("orchestrator: run %s planner: %v", r.ID, err)
-		}
-	}
-
-	// plan_gate → working → (merging | failed). Phase 3 auto-advances the plan
-	// gate only when configured to; Phase 5 replaces this with the gate engine.
-	if o.cfg.AutoAdvanceGates {
-		gated, err := o.cfg.Store.ListRunsByPhase(ctx, string(fsm.PhasePlanGate))
-		if err != nil {
-			return fmt.Errorf("list plan_gate: %w", err)
-		}
-		for _, r := range gated {
-			if err := o.driveWorkers(ctx, r); err != nil {
-				log.Printf("orchestrator: run %s workers: %v", r.ID, err)
-			}
-		}
-	}
-
-	// merging → (merge_gate | failed). Merging is automatic work, not a gate, so
-	// it is driven unconditionally; driveMerger self-guards when no MergerCmd is
-	// configured (the run rests at merging).
-	merging, err := o.cfg.Store.ListRunsByPhase(ctx, string(fsm.PhaseMerging))
-	if err != nil {
-		return fmt.Errorf("list merging: %w", err)
-	}
-	for _, r := range merging {
-		if err := o.driveMerger(ctx, r); err != nil {
-			log.Printf("orchestrator: run %s merger: %v", r.ID, err)
-		}
-	}
-
-	// merge_gate → done. Like the plan gate, auto-advanced only when configured.
-	if o.cfg.AutoAdvanceGates {
-		mgated, err := o.cfg.Store.ListRunsByPhase(ctx, string(fsm.PhaseMergeGate))
-		if err != nil {
-			return fmt.Errorf("list merge_gate: %w", err)
-		}
-		for _, r := range mgated {
-			if err := o.driveMergeGate(ctx, r); err != nil {
-				log.Printf("orchestrator: run %s merge_gate: %v", r.ID, err)
-			}
+	for _, r := range runs {
+		if err := drive(ctx, r); err != nil {
+			log.Printf("orchestrator: run %s %s: %v", r.ID, phase, err)
 		}
 	}
 	return nil

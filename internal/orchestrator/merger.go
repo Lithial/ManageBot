@@ -93,32 +93,18 @@ func (o *Orchestrator) driveMerger(ctx context.Context, r store.Run) error {
 		log.Printf("orchestrator: run %s record merge_done: %v", r.ID, err)
 	}
 
+	// Open the merge gate before advancing, so phase==merge_gate always has the
+	// gate present (no observable window).
+	if err := o.openGate(ctx, r, "merge"); err != nil {
+		log.Printf("orchestrator: run %s open merge gate: %v", r.ID, err)
+		return o.failMerge(ctx, r.ID)
+	}
 	next, err := fsm.Advance(fsm.PhaseMerging, fsm.EventMergeDone)
 	if err != nil {
 		return fmt.Errorf("fsm merge_done: %w", err)
 	}
 	if err := o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(next)); err != nil {
 		return fmt.Errorf("update run phase merge_gate: %w", err)
-	}
-	return nil
-}
-
-// driveMergeGate advances a run merge_gate → done (the Phase 4 auto-gate
-// scaffold) and records a run_done event — the "basic emission" signal. Phase 5
-// replaces the auto-advance with real merge-gate approval.
-func (o *Orchestrator) driveMergeGate(ctx context.Context, r store.Run) error {
-	next, err := fsm.Advance(fsm.PhaseMergeGate, fsm.EventGateApprove)
-	if err != nil {
-		return fmt.Errorf("fsm gate_approve: %w", err)
-	}
-	if err := o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(next)); err != nil {
-		return fmt.Errorf("update run phase done: %w", err)
-	}
-	payload, _ := json.Marshal(map[string]string{"merge_branch": fmt.Sprintf("wrap/%s/merge", r.ID)})
-	if _, err := o.cfg.Store.InsertEvent(ctx, store.Event{
-		RunID: r.ID, Kind: "run_done", PayloadJSON: string(payload),
-	}); err != nil {
-		log.Printf("orchestrator: run %s record run_done: %v", r.ID, err)
 	}
 	return nil
 }

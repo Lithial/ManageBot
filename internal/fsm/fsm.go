@@ -68,9 +68,10 @@ var transitions = map[Phase]map[Event]Phase{
 		EventPlanFailed: PhaseFailed,
 	},
 	PhasePlanGate: {
-		// Phase 3 auto-advances this (no gate engine until Phase 5). Phase 5 will
-		// gate the work_start event behind plan-gate approval.
-		EventWorkStart: PhaseWorking,
+		// work_start is emitted by the orchestrator once the plan gate resolves
+		// approved; gate_reject fails the run (Phase 5 gate engine).
+		EventWorkStart:  PhaseWorking,
+		EventGateReject: PhaseFailed,
 	},
 	PhaseWorking: {
 		EventWorkDone:   PhaseMerging,
@@ -81,9 +82,10 @@ var transitions = map[Phase]map[Event]Phase{
 		EventMergeFailed: PhaseFailed,
 	},
 	PhaseMergeGate: {
-		// Phase 4 auto-advances this (no gate engine until Phase 5), same scaffold
-		// as the plan gate. Phase 5 gates gate_approve behind merge-gate approval.
+		// gate_approve advances to done once the merge gate resolves approved;
+		// gate_reject fails the run (Phase 5 gate engine).
 		EventGateApprove: PhaseDone,
+		EventGateReject:  PhaseFailed,
 	},
 }
 
