@@ -71,6 +71,9 @@ func TestAdvanceTransitions(t *testing.T) {
 		{"merge_gate->done on gate_approve", fsm.PhaseMergeGate, fsm.EventGateApprove, fsm.PhaseDone, false},
 		{"invalid: merging->done directly", fsm.PhaseMerging, fsm.EventGateApprove, "", true},
 		{"invalid: merge_gate->merging", fsm.PhaseMergeGate, fsm.EventMergeDone, "", true},
+		// Phase 5 gate rejections.
+		{"plan_gate->failed on gate_reject", fsm.PhasePlanGate, fsm.EventGateReject, fsm.PhaseFailed, false},
+		{"merge_gate->failed on gate_reject", fsm.PhaseMergeGate, fsm.EventGateReject, fsm.PhaseFailed, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
