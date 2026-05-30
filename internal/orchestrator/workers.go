@@ -60,6 +60,11 @@ func (o *Orchestrator) driveWorkers(ctx context.Context, r store.Run) error {
 		maxWorkers = defaultMaxWorkers
 	}
 
+	// Run-scoped context so `wrap kill` can cancel all of this run's workers.
+	runCtx, cancel := context.WithCancel(ctx)
+	o.kills.register(r.ID, cancel)
+	defer func() { o.kills.deregister(r.ID); cancel() }()
+
 	// `git worktree add` takes repo-wide ref/index locks; serialize the (quick)
 	// plumbing so parallel workers don't collide. The subprocesses themselves
 	// still run concurrently.
@@ -67,7 +72,12 @@ func (o *Orchestrator) driveWorkers(ctx context.Context, r store.Run) error {
 	run := func(ctx context.Context, t Task) taskStatus {
 		return o.runWorker(ctx, r, proj, t, &wtMu)
 	}
-	results := schedule(ctx, tasks, maxWorkers, run)
+	results := schedule(runCtx, tasks, maxWorkers, run)
+
+	// If the run was killed mid-work, leave the terminal `killed` phase alone.
+	if o.isKilled(ctx, r.ID) {
+		return nil
+	}
 
 	anyDone := false
 	for _, st := range results {

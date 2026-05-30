@@ -52,14 +52,16 @@ type Config struct {
 }
 
 type Orchestrator struct {
-	cfg Config
-	wt  *worktree.Manager
+	cfg   Config
+	wt    *worktree.Manager
+	kills *cancelRegistry
 }
 
 func New(cfg Config) *Orchestrator {
 	return &Orchestrator{
-		cfg: cfg,
-		wt:  worktree.NewManager(cfg.StateDir),
+		cfg:   cfg,
+		wt:    worktree.NewManager(cfg.StateDir),
+		kills: newCancelRegistry(),
 	}
 }
 

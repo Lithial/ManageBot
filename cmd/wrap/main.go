@@ -33,7 +33,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: wrap <command> [args...]\ncommands: run, submit, github, emit, approve, reject, tui, attach")
+		return errors.New("usage: wrap <command> [args...]\ncommands: run, submit, github, emit, approve, reject, kill, tui, attach")
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -53,9 +53,30 @@ func run(args []string) error {
 		return cmdGitHub(rest)
 	case "emit":
 		return cmdEmit(rest)
+	case "kill":
+		return cmdKill(rest)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
+}
+
+// cmdKill implements `wrap kill <run-id>`.
+func cmdKill(args []string) error {
+	fs := flag.NewFlagSet("kill", flag.ContinueOnError)
+	socket := fs.String("socket", defaultSocketPath(), "wrapd Unix socket path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: wrap kill [--socket PATH] <run-id>")
+	}
+	resp, err := client.New(*socket).Kill(context.Background(), fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	out, _ := json.MarshalIndent(resp, "", "  ")
+	fmt.Println(string(out))
+	return nil
 }
 
 // cmdTUI launches the dashboard TUI listing all runs.

@@ -98,6 +98,29 @@ func (c *Client) Reject(ctx context.Context, runID, by string) (intake.ResolveGa
 	return c.resolveGate(ctx, runID, "reject", by)
 }
 
+// Kill moves a run to the terminal killed phase.
+func (c *Client) Kill(ctx context.Context, runID string) (intake.KillResponse, error) {
+	url := "http://wrap/runs/" + runID + "/kill"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return intake.KillResponse{}, fmt.Errorf("kill: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return intake.KillResponse{}, fmt.Errorf("run %q: %w", runID, ErrNotFound)
+	}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return intake.KillResponse{}, fmt.Errorf("kill: status %d: %s", resp.StatusCode, raw)
+	}
+	var out intake.KillResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return intake.KillResponse{}, fmt.Errorf("decode response: %w", err)
+	}
+	return out, nil
+}
+
 func (c *Client) resolveGate(ctx context.Context, runID, action, by string) (intake.ResolveGateResponse, error) {
 	body, err := json.Marshal(intake.ResolveGateRequest{By: by})
 	if err != nil {

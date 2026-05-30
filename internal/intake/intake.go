@@ -64,3 +64,9 @@ type ResolveGateResponse struct {
 	GateID string `json:"gate_id"`
 	Status string `json:"status"` // "approved" | "rejected"
 }
+
+// KillResponse is the body of a successful POST /runs/{id}/kill.
+type KillResponse struct {
+	RunID string `json:"run_id"`
+	Phase string `json:"phase"` // "killed"
+}

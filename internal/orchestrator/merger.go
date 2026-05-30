@@ -61,16 +61,24 @@ func (o *Orchestrator) driveMerger(ctx context.Context, r store.Run) error {
 	cmd := o.cfg.MergerCmd(mergeContext)
 	cmd.Dir = wt.Path
 
-	stepCtx := ctx
+	// Run-scoped context so `wrap kill` can stop the merger promptly.
+	runCtx, cancelRun := context.WithCancel(ctx)
+	o.kills.register(r.ID, cancelRun)
+	defer func() { o.kills.deregister(r.ID); cancelRun() }()
+
+	stepCtx := runCtx
 	if o.cfg.StepTimeout > 0 {
 		var cancel context.CancelFunc
-		stepCtx, cancel = context.WithTimeout(ctx, o.cfg.StepTimeout)
+		stepCtx, cancel = context.WithTimeout(runCtx, o.cfg.StepTimeout)
 		defer cancel()
 	}
 	out, err := supervisor.Run(stepCtx, supervisor.Request{
 		Cmd:          cmd,
 		StdinPayload: []byte(mergeContext),
 	})
+	if o.isKilled(ctx, r.ID) {
+		return nil // killed mid-merge; leave the terminal phase alone
+	}
 	if err != nil {
 		log.Printf("orchestrator: run %s supervise merger: %v", r.ID, err)
 		return o.failMerge(ctx, r.ID)

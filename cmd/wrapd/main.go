@@ -116,6 +116,7 @@ func main() {
 	}
 	orchCtx, orchCancel := context.WithCancel(context.Background())
 	go orch.Run(orchCtx, *tickInterval)
+	go orch.WatchKills(orchCtx, *tickInterval)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
