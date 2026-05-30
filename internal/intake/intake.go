@@ -53,9 +53,17 @@ type ListRunsResponse struct {
 	Runs []RunSummary `json:"runs"`
 }
 
-// ResolveGateRequest is the body of POST /runs/{id}/approve|reject.
+// ResolveGateRequest is the body of POST /runs/{id}/approve|reject|resolve.
 type ResolveGateRequest struct {
 	By string `json:"by,omitempty"` // who resolved it; defaults to "cli"
+	// Action is the optional typed resolution action (e.g. proceed, retry,
+	// drop_branch, takeover, abort). Empty preserves the default decision
+	// semantics (approve=proceed / reject=abort). Validated against the gate
+	// kind at the API boundary.
+	Action string `json:"action,omitempty"`
+	// Decision selects approve vs reject for the POST /resolve route, which is
+	// neither a plain approve nor reject. Ignored by /approve and /reject.
+	Decision string `json:"decision,omitempty"`
 }
 
 // ResolveGateResponse is the body of a successful gate resolution.
