@@ -46,6 +46,8 @@ func main() {
 	plannerEnvFlag := flag.String("planner-env", "", "comma-separated KEY=VAL pairs to add to the planner's environment (test helper)")
 	workerCmd := flag.String("worker-cmd", "claude", "executable to spawn as each worker (Phase 3: bare path; future phases add args)")
 	workerEnvFlag := flag.String("worker-env", "", "comma-separated KEY=VAL pairs to add to each worker's environment (test helper)")
+	mergerCmd := flag.String("merger-cmd", "claude", "executable to spawn as the merger (Phase 4: bare path; future phases add args)")
+	mergerEnvFlag := flag.String("merger-env", "", "comma-separated KEY=VAL pairs to add to the merger's environment (test helper)")
 	maxWorkers := flag.Int("max-workers", 4, "max simultaneous worker subprocesses per run")
 	autoAdvanceGates := flag.Bool("auto-advance-gates", false, "auto-advance plan_gate into the working phase without approval (Phase 3 scaffold; Phase 5 adds the real gate engine)")
 	tickInterval := flag.Duration("tick-interval", 500*time.Millisecond, "orchestrator poll interval")
@@ -78,6 +80,7 @@ func main() {
 
 	plannerEnv := parseEnvFlag(*plannerEnvFlag)
 	workerEnv := parseEnvFlag(*workerEnvFlag)
+	mergerEnv := parseEnvFlag(*mergerEnvFlag)
 	orch := orchestrator.New(orchestrator.Config{
 		Store:    s,
 		StateDir: *stateDir,
@@ -92,6 +95,13 @@ func main() {
 			c := exec.Command(*workerCmd)
 			if len(workerEnv) > 0 {
 				c.Env = append(os.Environ(), workerEnv...)
+			}
+			return c
+		},
+		MergerCmd: func(_ string) *exec.Cmd {
+			c := exec.Command(*mergerCmd)
+			if len(mergerEnv) > 0 {
+				c.Env = append(os.Environ(), mergerEnv...)
 			}
 			return c
 		},
