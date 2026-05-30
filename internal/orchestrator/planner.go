@@ -13,23 +13,19 @@ import (
 	"github.com/Lithial/ManageBot/internal/worktree"
 )
 
-// logPlannerOutput emits diagnostic lines for a failed planner outcome.
-// stderr can be large; we log a bounded tail.
-func logPlannerOutput(runID string, out supervisor.Outcome) {
-	if len(out.Stderr) > 0 {
-		tail := out.Stderr
-		const max = 2048
-		if len(tail) > max {
-			tail = tail[len(tail)-max:]
-		}
-		log.Printf("orchestrator: run %s planner stderr (tail): %s", runID, tail)
+// logPlannerStderrTail emits a bounded tail of the planner's stderr for
+// diagnostic context on failure paths. Large stderr buffers are clipped
+// at maxStderrTail bytes to keep logs digestible.
+func logPlannerStderrTail(runID string, out supervisor.Outcome) {
+	if len(out.Stderr) == 0 {
+		return
 	}
-	if out.MalformedLines > 0 {
-		log.Printf("orchestrator: run %s planner emitted %d malformed lines (protocol bug)", runID, out.MalformedLines)
+	const maxStderrTail = 2048
+	tail := out.Stderr
+	if len(tail) > maxStderrTail {
+		tail = tail[len(tail)-maxStderrTail:]
 	}
-	if out.WaitErr != nil {
-		log.Printf("orchestrator: run %s planner wait error: %v", runID, out.WaitErr)
-	}
+	log.Printf("orchestrator: run %s planner stderr (tail): %s", runID, tail)
 }
 
 // drivePlanner advances a single run pending → planning → (plan_gate | failed).
@@ -81,7 +77,7 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 		StdinPayload: []byte(r.SpecMD),
 	})
 	if err != nil {
-		logPlannerOutput(r.ID, out)
+		logPlannerStderrTail(r.ID, out)
 		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
 		return fmt.Errorf("supervise planner: %w", err)
 	}
@@ -110,14 +106,7 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 	}
 
 	if out.ExitCode != 0 || planMsg == nil {
-		if len(out.Stderr) > 0 {
-			tail := out.Stderr
-			const max = 2048
-			if len(tail) > max {
-				tail = tail[len(tail)-max:]
-			}
-			log.Printf("orchestrator: run %s planner stderr (tail): %s", r.ID, tail)
-		}
+		logPlannerStderrTail(r.ID, out)
 		nextPhase, _ := fsm.Advance(fsm.PhasePlanning, fsm.EventPlanFailed)
 		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(nextPhase))
 		return fmt.Errorf("planner failed: exit=%d hasPlan=%v", out.ExitCode, planMsg != nil)
