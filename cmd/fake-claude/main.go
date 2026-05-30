@@ -74,18 +74,24 @@ func runScript(path string) int {
 		}
 		switch a.Kind {
 		case "progress":
-			emitJSON(out, map[string]any{
+			if err := emitJSON(out, map[string]any{
 				"method": "report_progress",
 				"params": map[string]any{"msg": a.Msg},
-			})
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "fake-claude: emit progress: %v\n", err)
+				return 1
+			}
 		case "plan":
-			emitJSON(out, map[string]any{
+			if err := emitJSON(out, map[string]any{
 				"method": "report_plan",
 				"params": map[string]any{
 					"plan_md":    a.PlanMD,
 					"tasks_json": a.TasksJSON,
 				},
-			})
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "fake-claude: emit plan: %v\n", err)
+				return 1
+			}
 		case "stderr":
 			fmt.Fprint(os.Stderr, a.Text)
 		case "sleep_ms":
@@ -108,11 +114,18 @@ func runScript(path string) int {
 	return 0
 }
 
-func emitJSON(w *bufio.Writer, v any) {
-	b, _ := json.Marshal(v)
-	_, _ = w.Write(b)
-	_ = w.WriteByte('\n')
-	_ = w.Flush()
+func emitJSON(w *bufio.Writer, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(b); err != nil {
+		return err
+	}
+	if err := w.WriteByte('\n'); err != nil {
+		return err
+	}
+	return w.Flush()
 }
 
 func runLegacy() int {
