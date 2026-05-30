@@ -104,14 +104,17 @@ func TestE2ERealClaude(t *testing.T) {
 		t.Fatalf("phase = %q after wait, want done", got.Phase)
 	}
 
-	// The merged branch should contain the worker's change.
+	// The merged branch should contain the file a worker created+committed and the
+	// merger merged in. We assert the artifact exists and is non-empty — NOT its
+	// exact text: planner plan-quality and worker/merger content fidelity are
+	// deliberately untested (they are real-LLM behavior, not wrap behavior).
 	mergeBranch := "wrap/" + submit.RunID + "/merge"
-	show := exec.Command("git", "-C", repo, "show", mergeBranch+":GREETING.txt")
-	out, err := show.Output()
+	out, err := exec.Command("git", "-C", repo, "show", mergeBranch+":GREETING.txt").Output()
 	if err != nil {
-		t.Fatalf("merged branch %s missing GREETING.txt: %v", mergeBranch, err)
+		t.Fatalf("merged branch %s missing GREETING.txt (the worker's committed artifact): %v", mergeBranch, err)
 	}
-	if !strings.Contains(string(out), want) {
-		t.Errorf("GREETING.txt = %q, want to contain %q", out, want)
+	if len(strings.TrimSpace(string(out))) == 0 {
+		t.Errorf("GREETING.txt is empty on %s", mergeBranch)
 	}
+	t.Logf("e2e ok: run %s reached done; %s:GREETING.txt = %q (wanted ~%q)", submit.RunID, mergeBranch, out, want)
 }
