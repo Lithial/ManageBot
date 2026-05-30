@@ -11,6 +11,7 @@ import (
 
 	"github.com/Lithial/ManageBot/internal/client"
 	"github.com/Lithial/ManageBot/internal/intake"
+	"github.com/Lithial/ManageBot/internal/tui"
 )
 
 func defaultSocketPath() string {
@@ -32,7 +33,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: wrap <command> [args...]\ncommands: run, approve, reject")
+		return errors.New("usage: wrap <command> [args...]\ncommands: run, approve, reject, tui, attach")
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -42,9 +43,36 @@ func run(args []string) error {
 		return cmdResolveGate("approve", rest)
 	case "reject":
 		return cmdResolveGate("reject", rest)
+	case "tui":
+		return cmdTUI(rest)
+	case "attach":
+		return cmdAttach(rest)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
+}
+
+// cmdTUI launches the dashboard TUI listing all runs.
+func cmdTUI(args []string) error {
+	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
+	socket := fs.String("socket", defaultSocketPath(), "wrapd Unix socket path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return tui.Run(client.New(*socket), "")
+}
+
+// cmdAttach launches the TUI directly in a single run's detail view.
+func cmdAttach(args []string) error {
+	fs := flag.NewFlagSet("attach", flag.ContinueOnError)
+	socket := fs.String("socket", defaultSocketPath(), "wrapd Unix socket path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: wrap attach [--socket PATH] <run-id>")
+	}
+	return tui.Run(client.New(*socket), fs.Arg(0))
 }
 
 // cmdResolveGate implements `wrap approve|reject <run-id>`, resolving the run's
