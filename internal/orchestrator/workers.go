@@ -91,10 +91,34 @@ func (o *Orchestrator) driveWorkers(ctx context.Context, r store.Run) error {
 	return nil
 }
 
-// runWorker creates an isolated worktree for one task, spawns the worker
-// subprocess, interprets its outcome into a terminal status, and persists a
-// workers row. It returns the task's terminal status for the scheduler.
+// runWorker runs a task to a terminal status, retrying retryable failures
+// (crash / timeout, never report_blocked or success) up to RetryBudget. Each
+// attempt is its own workers row + worktree for forensics.
 func (o *Orchestrator) runWorker(ctx context.Context, r store.Run, proj store.Project, t Task, wtMu *sync.Mutex) taskStatus {
+	attempts := o.cfg.RetryBudget + 1 // budget extra tries beyond the first
+	if attempts < 1 {
+		attempts = 1
+	}
+	var status taskStatus
+	for attempt := 0; attempt < attempts; attempt++ {
+		var retryable bool
+		status, retryable = o.runWorkerAttempt(ctx, r, proj, t, wtMu)
+		if status == statusDone || !retryable {
+			return status
+		}
+		if attempt < attempts-1 {
+			o.recordWorkerEvent(ctx, r.ID, "", t, statusFailed, "", "")
+			payload, _ := json.Marshal(map[string]any{"task_id": t.ID, "next_attempt": attempt + 1})
+			_, _ = o.cfg.Store.InsertEvent(ctx, store.Event{RunID: r.ID, Kind: "worker_retry", PayloadJSON: string(payload)})
+			log.Printf("orchestrator: run %s task %s failed (retryable); retrying (%d/%d)", r.ID, t.ID, attempt+1, attempts-1)
+		}
+	}
+	return status
+}
+
+// runWorkerAttempt performs one spawn of a task and reports its terminal status
+// plus whether the failure (if any) is worth retrying.
+func (o *Orchestrator) runWorkerAttempt(ctx context.Context, r store.Run, proj store.Project, t Task, wtMu *sync.Mutex) (status taskStatus, retryable bool) {
 	wid := ids.New()
 	branch := fmt.Sprintf("wrap/%s/%s", r.ID, wid)
 	subpath := filepath.Join("runs", r.ID, wid)
@@ -106,7 +130,7 @@ func (o *Orchestrator) runWorker(ctx context.Context, r store.Run, proj store.Pr
 		ID: wid, RunID: r.ID, TaskID: t.ID, Branch: branch, WorktreePath: wtPath,
 	}); err != nil {
 		log.Printf("orchestrator: run %s task %s insert worker: %v", r.ID, t.ID, err)
-		return statusFailed
+		return statusFailed, false
 	}
 
 	wtMu.Lock()
@@ -118,9 +142,11 @@ func (o *Orchestrator) runWorker(ctx context.Context, r store.Run, proj store.Pr
 	})
 	wtMu.Unlock()
 	if err != nil {
+		// A git failure will likely recur — not worth retrying.
 		log.Printf("orchestrator: run %s task %s worktree add: %v", r.ID, t.ID, err)
 		_ = o.cfg.Store.FinishWorker(ctx, wid, string(statusFailed), -1)
-		return statusFailed
+		o.recordWorkerEvent(ctx, r.ID, wid, t, statusFailed, "", "")
+		return statusFailed, false
 	}
 
 	cmd := o.cfg.WorkerCmd(t.Title)
@@ -132,14 +158,23 @@ func (o *Orchestrator) runWorker(ctx context.Context, r store.Run, proj store.Pr
 		stepCtx, cancel = context.WithTimeout(ctx, o.cfg.StepTimeout)
 		defer cancel()
 	}
-	out, err := supervisor.Run(stepCtx, supervisor.Request{
+	out, runErr := supervisor.Run(stepCtx, supervisor.Request{
 		Cmd:          cmd,
 		StdinPayload: []byte(t.Title),
 	})
-	if err != nil {
-		log.Printf("orchestrator: run %s task %s supervise: %v", r.ID, t.ID, err)
+
+	// A hit step deadline means the worker overran its budget and was killed.
+	if stepCtx.Err() == context.DeadlineExceeded {
+		log.Printf("orchestrator: run %s task %s timed out", r.ID, t.ID)
 		_ = o.cfg.Store.FinishWorker(ctx, wid, string(statusFailed), out.ExitCode)
-		return statusFailed
+		o.recordWorkerTimeout(ctx, r.ID, wid, t)
+		return statusFailed, true
+	}
+	if runErr != nil {
+		log.Printf("orchestrator: run %s task %s supervise: %v", r.ID, t.ID, runErr)
+		_ = o.cfg.Store.FinishWorker(ctx, wid, string(statusFailed), out.ExitCode)
+		o.recordWorkerEvent(ctx, r.ID, wid, t, statusFailed, "", "")
+		return statusFailed, true
 	}
 	if out.MalformedLines > 0 {
 		log.Printf("orchestrator: run %s task %s emitted %d malformed lines (protocol bug)", r.ID, t.ID, out.MalformedLines)
@@ -153,7 +188,25 @@ func (o *Orchestrator) runWorker(ctx context.Context, r store.Run, proj store.Pr
 		log.Printf("orchestrator: run %s task %s finish worker: %v", r.ID, t.ID, err)
 	}
 	o.recordWorkerEvent(ctx, r.ID, wid, t, status, summary, reason)
-	return status
+	switch {
+	case status == statusDone:
+		return statusDone, false
+	case reason != "":
+		return statusFailed, false // blocked: needs a human, do not retry
+	default:
+		return statusFailed, true // crash: retryable
+	}
+}
+
+// recordWorkerTimeout records a worker_timeout event for a worker killed at its
+// runtime ceiling.
+func (o *Orchestrator) recordWorkerTimeout(ctx context.Context, runID, workerID string, t Task) {
+	payload, _ := json.Marshal(map[string]string{"task_id": t.ID, "reason": "timeout"})
+	if _, err := o.cfg.Store.InsertEvent(ctx, store.Event{
+		RunID: runID, WorkerID: workerID, Kind: "worker_timeout", PayloadJSON: string(payload),
+	}); err != nil {
+		log.Printf("orchestrator: run %s task %s record worker_timeout: %v", runID, t.ID, err)
+	}
 }
 
 // recordWorkerEvent appends a terminal-status event for a worker so the merger

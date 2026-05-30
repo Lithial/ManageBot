@@ -45,6 +45,10 @@ type Config struct {
 
 	// MaxWorkers caps simultaneous worker subprocesses per run (default 4).
 	MaxWorkers int
+
+	// RetryBudget is how many extra attempts a retryable worker failure (crash or
+	// timeout) gets beyond the first. Zero means no retries.
+	RetryBudget int
 }
 
 type Orchestrator struct {
