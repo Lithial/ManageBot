@@ -44,6 +44,27 @@ func (c *Client) Healthz(ctx context.Context) error {
 	return nil
 }
 
+func (c *Client) GetRun(ctx context.Context, id string) (intake.GetRunResponse, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://wrap/runs/"+id, nil)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return intake.GetRunResponse{}, fmt.Errorf("get run: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return intake.GetRunResponse{}, fmt.Errorf("run %q: not found", id)
+	}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return intake.GetRunResponse{}, fmt.Errorf("get run: status %d: %s", resp.StatusCode, raw)
+	}
+	var out intake.GetRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return intake.GetRunResponse{}, fmt.Errorf("decode response: %w", err)
+	}
+	return out, nil
+}
+
 func (c *Client) SubmitRun(ctx context.Context, req intake.SubmitRunRequest) (intake.SubmitRunResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {

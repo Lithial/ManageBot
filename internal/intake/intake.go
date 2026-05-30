@@ -24,3 +24,12 @@ type SubmitRunResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
+
+// GetRunResponse is the body of GET /runs/{id}.
+type GetRunResponse struct {
+	RunID     string `json:"run_id"`
+	ProjectID string `json:"project_id"`
+	Phase     string `json:"phase"`
+	PlanMD    string `json:"plan_md,omitempty"`
+	TasksJSON string `json:"tasks_json,omitempty"`
+}

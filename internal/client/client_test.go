@@ -37,3 +37,40 @@ func TestClientHealthz(t *testing.T) {
 		t.Errorf("Healthz: %v", err)
 	}
 }
+
+func TestClientGetRun(t *testing.T) {
+	sock := testutil.StartInProcessServer(t)
+	c := client.New(sock)
+
+	submit, err := c.SubmitRun(context.Background(), intake.SubmitRunRequest{
+		ProjectName: "demo",
+		RepoPath:    "/tmp/demo",
+		IntakeKind:  "cli",
+		SpecMD:      "# spec",
+	})
+	if err != nil {
+		t.Fatalf("SubmitRun: %v", err)
+	}
+
+	got, err := c.GetRun(context.Background(), submit.RunID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.RunID != submit.RunID {
+		t.Errorf("RunID = %q, want %q", got.RunID, submit.RunID)
+	}
+	if got.Phase != "pending" {
+		t.Errorf("Phase = %q, want pending", got.Phase)
+	}
+	if got.PlanMD != "" {
+		t.Errorf("PlanMD = %q, want empty for pending run", got.PlanMD)
+	}
+}
+
+func TestClientGetRun_notFound(t *testing.T) {
+	sock := testutil.StartInProcessServer(t)
+	c := client.New(sock)
+	if _, err := c.GetRun(context.Background(), "01ABCNOTFOUND"); err == nil {
+		t.Fatal("GetRun for unknown id: want error, got nil")
+	}
+}
