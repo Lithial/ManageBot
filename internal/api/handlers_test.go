@@ -284,6 +284,81 @@ func TestKill_terminalRunConflicts(t *testing.T) {
 	}
 }
 
+func TestWorkerTaskAndSiblings(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "working"})
+	_, _ = st.InsertPlan(ctx, store.Plan{RunID: rid, PlanMD: "# P", TasksJSON: `[{"id":"t1","title":"Build A","description":"do the A thing"},{"id":"t2","title":"Build B"}]`})
+	wid, _ := st.InsertWorker(ctx, store.Worker{RunID: rid, TaskID: "t1", Branch: "b", WorktreePath: "/wt"})
+
+	resp, err := c.Get("http://wrap/workers/" + wid + "/task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var task intake.WorkerTaskResponse
+	_ = json.NewDecoder(resp.Body).Decode(&task)
+	resp.Body.Close()
+	if task.Title != "Build A" || task.Description != "do the A thing" {
+		t.Errorf("task = %+v", task)
+	}
+
+	resp2, err := c.Get("http://wrap/workers/" + wid + "/siblings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sib intake.SiblingTasksResponse
+	_ = json.NewDecoder(resp2.Body).Decode(&sib)
+	resp2.Body.Close()
+	if len(sib.Titles) != 1 || sib.Titles[0] != "Build B" {
+		t.Errorf("siblings = %+v, want [Build B]", sib.Titles)
+	}
+}
+
+func TestWorkerReportDone(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "working"})
+	wid, _ := st.InsertWorker(ctx, store.Worker{RunID: rid, TaskID: "t1", Branch: "b", WorktreePath: "/wt"})
+
+	resp, err := c.Post("http://wrap/workers/"+wid+"/done", "application/json", strings.NewReader(`{"summary":"shipped it"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	evs, _ := st.ListEventsByRun(ctx, rid)
+	var found bool
+	for _, e := range evs {
+		if e.Kind == "worker_report_done" && e.WorkerID == wid && strings.Contains(e.PayloadJSON, "shipped it") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no worker_report_done event with summary; events=%+v", evs)
+	}
+}
+
+func TestWorkerTask_notFound(t *testing.T) {
+	sock := testutil.StartInProcessServer(t)
+	c := newSocketClient(sock)
+	resp, err := c.Get("http://wrap/workers/nope/task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestGetRun_notFound(t *testing.T) {
 	sock := testutil.StartInProcessServer(t)
 	c := newSocketClient(sock)
