@@ -170,7 +170,7 @@ func (o *Orchestrator) runWorkerAttempt(ctx context.Context, r store.Run, proj s
 	}
 	out, runErr := supervisor.Run(stepCtx, supervisor.Request{
 		Cmd:          cmd,
-		StdinPayload: []byte(t.Title),
+		StdinPayload: []byte(t.Title + workerDirective),
 	})
 
 	// A hit step deadline means the worker overran its budget and was killed.

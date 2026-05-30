@@ -83,7 +83,7 @@ func (o *Orchestrator) driveMerger(ctx context.Context, r store.Run) error {
 	}
 	out, err := supervisor.Run(stepCtx, supervisor.Request{
 		Cmd:          cmd,
-		StdinPayload: []byte(mergeContext),
+		StdinPayload: []byte(mergeContext + mergerDirective),
 	})
 	if o.isKilled(ctx, r.ID) {
 		return nil // killed mid-merge; leave the terminal phase alone

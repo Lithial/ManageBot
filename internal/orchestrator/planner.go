@@ -112,7 +112,7 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 	}
 	out, err := supervisor.Run(stepCtx, supervisor.Request{
 		Cmd:          cmd,
-		StdinPayload: []byte(r.SpecMD),
+		StdinPayload: []byte(r.SpecMD + plannerDirective),
 	})
 	if err != nil {
 		logPlannerStderrTail(r.ID, out)
