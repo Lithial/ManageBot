@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -144,39 +145,67 @@ func (o *Orchestrator) runWorker(ctx context.Context, r store.Run, proj store.Pr
 		log.Printf("orchestrator: run %s task %s emitted %d malformed lines (protocol bug)", r.ID, t.ID, out.MalformedLines)
 	}
 
-	status, reason := interpretWorkerOutcome(out)
+	status, summary, reason := interpretWorkerOutcome(out)
 	if reason != "" {
 		log.Printf("orchestrator: run %s task %s blocked: %s", r.ID, t.ID, reason)
 	}
 	if err := o.cfg.Store.FinishWorker(ctx, wid, string(status), out.ExitCode); err != nil {
 		log.Printf("orchestrator: run %s task %s finish worker: %v", r.ID, t.ID, err)
 	}
+	o.recordWorkerEvent(ctx, r.ID, wid, t, status, summary, reason)
 	return status
 }
 
-// interpretWorkerOutcome maps a supervisor Outcome to a terminal status per the
-// spec "done predicate": report_done AND exit 0 → done; report_blocked → failed
-// (with the reason); anything else → failed. If a worker both blocked and
-// reported done, blocked wins — it asked for human judgment.
-func interpretWorkerOutcome(out supervisor.Outcome) (taskStatus, string) {
+// recordWorkerEvent appends a terminal-status event for a worker so the merger
+// (and the emission log) can see what each branch produced. Best-effort: a
+// failed event write is logged, not fatal.
+func (o *Orchestrator) recordWorkerEvent(ctx context.Context, runID, workerID string, t Task, status taskStatus, summary, reason string) {
+	var kind string
+	payload := map[string]string{"task_id": t.ID}
+	switch {
+	case status == statusDone:
+		kind = "worker_done"
+		payload["summary"] = summary
+	case reason != "":
+		kind = "worker_blocked"
+		payload["reason"] = reason
+	default:
+		kind = "worker_failed"
+	}
+	b, _ := json.Marshal(payload)
+	if _, err := o.cfg.Store.InsertEvent(ctx, store.Event{
+		RunID: runID, WorkerID: workerID, Kind: kind, PayloadJSON: string(b),
+	}); err != nil {
+		log.Printf("orchestrator: run %s task %s record %s event: %v", runID, t.ID, kind, err)
+	}
+}
+
+// interpretWorkerOutcome maps a supervisor Outcome to a terminal status plus a
+// done summary and a blocked reason, per the spec "done predicate": report_done
+// AND exit 0 → done (with summary); report_blocked → failed (with reason);
+// anything else → failed. If a worker both blocked and reported done, blocked
+// wins — it asked for human judgment.
+func interpretWorkerOutcome(out supervisor.Outcome) (status taskStatus, summary, reason string) {
 	var sawDone, sawBlocked bool
-	var blockedReason string
 	for _, m := range out.Messages {
 		switch m.Method {
 		case workerrpc.MethodReportDone:
 			sawDone = true
+			if d, err := workerrpc.AsDone(m); err == nil {
+				summary = d.Summary
+			}
 		case workerrpc.MethodReportBlocked:
 			sawBlocked = true
 			if b, err := workerrpc.AsBlocked(m); err == nil {
-				blockedReason = b.Reason
+				reason = b.Reason
 			}
 		}
 	}
 	if sawBlocked {
-		return statusFailed, blockedReason
+		return statusFailed, "", reason
 	}
 	if sawDone && out.ExitCode == 0 {
-		return statusDone, ""
+		return statusDone, summary, ""
 	}
-	return statusFailed, ""
+	return statusFailed, "", ""
 }

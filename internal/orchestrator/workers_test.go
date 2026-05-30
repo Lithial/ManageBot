@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,6 +108,50 @@ func TestTick_planGateToMerging_allWorkersDone(t *testing.T) {
 		if w.Status != "done" {
 			t.Errorf("worker %s status = %q, want done", w.TaskID, w.Status)
 		}
+	}
+}
+
+func TestTick_workerPhaseRecordsWorkerDoneEvents(t *testing.T) {
+	fakeClaude, err := testutil.LocateBinary("fake-claude")
+	if err != nil {
+		t.Skipf("fake-claude not built: %v", err)
+	}
+	repo := testutil.InitGitRepo(t)
+	stateDir := t.TempDir()
+	st, err := store.Open(context.Background(), filepath.Join(stateDir, "wrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	rid := seedPlanGateRun(t, st, repo, `[{"id":"t1","title":"only"}]`)
+	script := workerScript(t, stateDir, "worker.jsonl",
+		`{"kind":"done","summary":"shipped t1"}`,
+		`{"kind":"exit","code":0}`,
+	)
+	o := newWorkerOrch(t, st, stateDir, fakeClaude, script, 4)
+	if err := o.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+
+	events, err := st.ListEventsByRun(context.Background(), rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, e := range events {
+		if e.Kind == "worker_done" {
+			found = true
+			if e.WorkerID == "" {
+				t.Errorf("worker_done event has empty WorkerID")
+			}
+			if !strings.Contains(e.PayloadJSON, "shipped t1") {
+				t.Errorf("worker_done payload = %q, want to contain summary", e.PayloadJSON)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no worker_done event recorded; events = %+v", events)
 	}
 }
 
