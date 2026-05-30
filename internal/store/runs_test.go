@@ -107,6 +107,38 @@ func TestUpdateRunPhase_unknownRun(t *testing.T) {
 	}
 }
 
+func TestListRuns_newestFirst(t *testing.T) {
+	ctx := context.Background()
+	s := openTempStore(t)
+
+	pid, _ := s.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/repo", DefaultGatesJSON: "{}"})
+	r1, _ := s.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "a", GatesJSON: "{}"})
+	r2, _ := s.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "b", GatesJSON: "{}"})
+	r3, _ := s.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "c", GatesJSON: "{}"})
+
+	got, err := s.ListRuns(ctx)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len=%d, want 3", len(got))
+	}
+	// Newest first; rowid breaks same-second ties so insertion order is reversed.
+	if got[0].ID != r3 || got[1].ID != r2 || got[2].ID != r1 {
+		t.Errorf("order = [%s %s %s], want [%s %s %s]", got[0].ID, got[1].ID, got[2].ID, r3, r2, r1)
+	}
+}
+
+func TestListRuns_empty(t *testing.T) {
+	got, err := openTempStore(t).ListRuns(context.Background())
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("len=%d, want 0", len(got))
+	}
+}
+
 func TestListRunsByPhase(t *testing.T) {
 	ctx := context.Background()
 	s := openTempStore(t)
