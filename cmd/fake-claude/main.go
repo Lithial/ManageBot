@@ -13,6 +13,8 @@
 //
 //	{"kind":"progress","msg":"..."}
 //	{"kind":"plan","plan_md":"...","tasks_json":"..."}
+//	{"kind":"done","summary":"..."}
+//	{"kind":"blocked","reason":"..."}
 //	{"kind":"stderr","text":"..."}
 //	{"kind":"sleep_ms","ms":N}
 //	{"kind":"exit","code":N}
@@ -39,6 +41,8 @@ type action struct {
 	Msg       string `json:"msg,omitempty"`
 	PlanMD    string `json:"plan_md,omitempty"`
 	TasksJSON string `json:"tasks_json,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 	Text      string `json:"text,omitempty"`
 	Ms        int    `json:"ms,omitempty"`
 	Code      int    `json:"code,omitempty"`
@@ -90,6 +94,22 @@ func runScript(path string) int {
 				},
 			}); err != nil {
 				fmt.Fprintf(os.Stderr, "fake-claude: emit plan: %v\n", err)
+				return 1
+			}
+		case "done":
+			if err := emitJSON(out, map[string]any{
+				"method": "report_done",
+				"params": map[string]any{"summary": a.Summary},
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "fake-claude: emit done: %v\n", err)
+				return 1
+			}
+		case "blocked":
+			if err := emitJSON(out, map[string]any{
+				"method": "report_blocked",
+				"params": map[string]any{"reason": a.Reason},
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "fake-claude: emit blocked: %v\n", err)
 				return 1
 			}
 		case "stderr":
