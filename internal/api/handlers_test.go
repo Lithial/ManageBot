@@ -63,6 +63,13 @@ func TestGetRun_notFound(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
+	var errResp intake.ErrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if errResp.Error == "" {
+		t.Error("error body missing 'error' field")
+	}
 }
 
 func newSocketClient(sock string) *http.Client {

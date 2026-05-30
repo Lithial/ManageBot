@@ -2,6 +2,7 @@ package client_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Lithial/ManageBot/internal/client"
@@ -70,7 +71,11 @@ func TestClientGetRun(t *testing.T) {
 func TestClientGetRun_notFound(t *testing.T) {
 	sock := testutil.StartInProcessServer(t)
 	c := client.New(sock)
-	if _, err := c.GetRun(context.Background(), "01ABCNOTFOUND"); err == nil {
+	_, err := c.GetRun(context.Background(), "01ABCNOTFOUND")
+	if err == nil {
 		t.Fatal("GetRun for unknown id: want error, got nil")
+	}
+	if !errors.Is(err, client.ErrNotFound) {
+		t.Fatalf("err = %v, want client.ErrNotFound", err)
 	}
 }

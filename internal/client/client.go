@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,10 @@ type Client struct {
 	http       *http.Client
 	socketPath string
 }
+
+// ErrNotFound is returned by GetRun (and future read methods) when the
+// server responds 404. Callers should use errors.Is(err, client.ErrNotFound).
+var ErrNotFound = errors.New("not found")
 
 func New(socketPath string) *Client {
 	return &Client{
@@ -52,7 +57,7 @@ func (c *Client) GetRun(ctx context.Context, id string) (intake.GetRunResponse, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return intake.GetRunResponse{}, fmt.Errorf("run %q: not found", id)
+		return intake.GetRunResponse{}, fmt.Errorf("run %q: %w", id, ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
