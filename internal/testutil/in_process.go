@@ -21,6 +21,15 @@ import (
 // the wrapd binary as an external subprocess.
 func StartInProcessServer(t *testing.T) string {
 	t.Helper()
+	sock, _ := StartInProcessServerWithStore(t)
+	return sock
+}
+
+// StartInProcessServerWithStore is StartInProcessServer but also returns the
+// backing *store.Store, so tests can seed state (events, plans, ...) that has
+// no API write path yet.
+func StartInProcessServerWithStore(t *testing.T) (string, *store.Store) {
+	t.Helper()
 	sock := filepath.Join(t.TempDir(), "wrap.sock")
 	dbPath := filepath.Join(t.TempDir(), "wrap.db")
 
@@ -44,10 +53,10 @@ func StartInProcessServer(t *testing.T) string {
 	for time.Now().Before(deadline) {
 		if c, err := net.Dial("unix", sock); err == nil {
 			_ = c.Close()
-			return sock
+			return sock, s
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("in-process server never came up")
-	return ""
+	return "", nil
 }
