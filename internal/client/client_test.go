@@ -11,6 +11,23 @@ import (
 	"github.com/Lithial/ManageBot/internal/testutil"
 )
 
+func TestClientListRuns(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := client.New(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "a", GatesJSON: "{}", Phase: "done"})
+
+	runs, err := c.ListRuns(ctx)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].RunID != rid || runs[0].Phase != "done" {
+		t.Errorf("runs = %+v", runs)
+	}
+}
+
 func TestClientApprove(t *testing.T) {
 	sock, st := testutil.StartInProcessServerWithStore(t)
 	c := client.New(sock)
