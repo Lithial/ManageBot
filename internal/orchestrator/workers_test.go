@@ -115,6 +115,84 @@ func TestTick_planGateToMerging_allWorkersDone(t *testing.T) {
 	}
 }
 
+// TestTick_perRunMaxWorkersSerializes proves the per-run cap (run.MaxWorkers),
+// not just the daemon flag, reaches the scheduler: with max_workers=1 two
+// independent tasks never run concurrently. Each worker records how many peers
+// were in-flight while it held its marker; under a cap of 1 that count is always
+// 1 (the scheduler won't start task B until task A's run func returns).
+func TestTick_perRunMaxWorkersSerializes(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	stateDir := t.TempDir()
+	st, err := store.Open(context.Background(), filepath.Join(stateDir, "wrap.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	// concDir holds one marker file per in-flight worker; `observed` collects the
+	// peer count each worker saw. Absolute so it survives the worker's cwd switch
+	// into its worktree.
+	concDir := t.TempDir()
+	observed := filepath.Join(concDir, "observed")
+	worker := workerScript(t, stateDir, "worker.sh",
+		"#!/bin/sh",
+		`me="`+concDir+`/$$"`,
+		`touch "$me"`,
+		`sleep 0.3`,
+		`ls "`+concDir+`" | grep -v observed | wc -l >> "`+observed+`"`,
+		`rm -f "$me"`,
+		`echo '{"method":"report_done","params":{"summary":"ok"}}'`,
+		`exit 0`,
+	)
+
+	// Two independent tasks (no deps) — both eligible at once, so an uncapped run
+	// would race them.
+	pid, _ := st.InsertProject(context.Background(), store.Project{Name: "proj", RepoPath: repo, DefaultGatesJSON: "{}"})
+	rid, err := st.InsertRun(context.Background(), store.Run{
+		ProjectID: pid, IntakeKind: "cli", SpecMD: "spec", GatesJSON: autoGatesJSON, MaxWorkers: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.InsertPlan(context.Background(), store.Plan{
+		RunID: rid, PlanMD: "# Plan",
+		TasksJSON: `[{"id":"t1","title":"first"},{"id":"t2","title":"second"}]`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateRunPhase(context.Background(), rid, "plan_gate"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Daemon-wide cap is generous (4); only the per-run cap of 1 should bind.
+	o := orchestrator.New(orchestrator.Config{
+		Store:      st,
+		StateDir:   stateDir,
+		MaxWorkers: 4,
+		WorkerCmd: func(string) *exec.Cmd {
+			return exec.Command("/bin/sh", worker)
+		},
+		StepTimeout: 10 * time.Second,
+	})
+	if err := o.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+
+	data, err := os.ReadFile(observed)
+	if err != nil {
+		t.Fatalf("read observed: %v", err)
+	}
+	counts := strings.Fields(string(data))
+	if len(counts) != 2 {
+		t.Fatalf("observed %d worker samples, want 2 (data=%q)", len(counts), data)
+	}
+	for _, c := range counts {
+		if strings.TrimSpace(c) != "1" {
+			t.Errorf("observed concurrency %q, want 1 (per-run cap not honored)", c)
+		}
+	}
+}
+
 func TestTick_workerPhaseRecordsWorkerDoneEvents(t *testing.T) {
 	fakeClaude, err := testutil.LocateBinary("fake-claude")
 	if err != nil {

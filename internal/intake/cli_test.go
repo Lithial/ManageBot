@@ -23,7 +23,7 @@ func TestCLIAdapterSubmitsSpecFile(t *testing.T) {
 	}
 
 	adapter := intake.NewCLIAdapter(c)
-	resp, err := adapter.SubmitFromSpec(context.Background(), specPath, repo)
+	resp, err := adapter.SubmitFromSpec(context.Background(), specPath, repo, 0)
 	if err != nil {
 		t.Fatalf("SubmitFromSpec: %v", err)
 	}

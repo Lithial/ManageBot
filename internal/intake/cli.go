@@ -22,8 +22,9 @@ func NewCLIAdapter(s RunSubmitter) *CLIAdapter {
 }
 
 // SubmitFromSpec reads the spec markdown at specPath and submits a new run
-// against the project rooted at repoPath. Returns the daemon's response.
-func (a *CLIAdapter) SubmitFromSpec(ctx context.Context, specPath, repoPath string) (SubmitRunResponse, error) {
+// against the project rooted at repoPath. maxWorkers is the optional per-run
+// concurrency cap (0 ⇒ the daemon default applies). Returns the daemon's response.
+func (a *CLIAdapter) SubmitFromSpec(ctx context.Context, specPath, repoPath string, maxWorkers int) (SubmitRunResponse, error) {
 	absSpec, err := filepath.Abs(specPath)
 	if err != nil {
 		return SubmitRunResponse{}, fmt.Errorf("abs spec path: %w", err)
@@ -43,5 +44,6 @@ func (a *CLIAdapter) SubmitFromSpec(ctx context.Context, specPath, repoPath stri
 		IntakeKind:  "cli",
 		IntakeRef:   absSpec,
 		SpecMD:      string(specBytes),
+		MaxWorkers:  maxWorkers,
 	})
 }

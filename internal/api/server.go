@@ -17,10 +17,23 @@ type Server struct {
 	socketPath string
 	httpSrv    *http.Server
 	readyCh    chan struct{}
+	// defaultMaxWorkers is the daemon's --max-workers flag: the per-run cap
+	// applied at submit time when the request doesn't specify one.
+	defaultMaxWorkers int
 }
 
-func NewServer(s *store.Store, socketPath string) *Server {
-	srv := &Server{store: s, socketPath: socketPath, readyCh: make(chan struct{})}
+// defaultMaxWorkersFallback is used when a caller passes a non-positive default
+// (e.g. testutil), keeping the spec's "default 4" invariant in one place.
+const defaultMaxWorkersFallback = 4
+
+// NewServer builds the API server. defaultMaxWorkers is the daemon-wide
+// per-run concurrency cap (the --max-workers flag); a non-positive value falls
+// back to 4.
+func NewServer(s *store.Store, socketPath string, defaultMaxWorkers int) *Server {
+	if defaultMaxWorkers < 1 {
+		defaultMaxWorkers = defaultMaxWorkersFallback
+	}
+	srv := &Server{store: s, socketPath: socketPath, readyCh: make(chan struct{}), defaultMaxWorkers: defaultMaxWorkers}
 	mux := http.NewServeMux()
 	srv.registerRoutes(mux)
 	srv.httpSrv = &http.Server{

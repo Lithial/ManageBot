@@ -165,11 +165,12 @@ func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	socket := fs.String("socket", defaultSocketPath(), "wrapd Unix socket path")
 	repo := fs.String("repo", "", "repo path (defaults to current working directory)")
+	maxWorkers := fs.Int("max-workers", 0, "per-run worker concurrency cap (0 ⇒ daemon default)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: wrap run [--socket PATH] [--repo PATH] <spec.md>")
+		return errors.New("usage: wrap run [--socket PATH] [--repo PATH] [--max-workers N] <spec.md>")
 	}
 	specPath := fs.Arg(0)
 
@@ -184,7 +185,7 @@ func cmdRun(args []string) error {
 
 	c := client.New(*socket)
 	adapter := intake.NewCLIAdapter(c)
-	resp, err := adapter.SubmitFromSpec(context.Background(), specPath, repoPath)
+	resp, err := adapter.SubmitFromSpec(context.Background(), specPath, repoPath, *maxWorkers)
 	if err != nil {
 		return err
 	}

@@ -55,7 +55,13 @@ func (o *Orchestrator) driveWorkers(ctx context.Context, r store.Run) error {
 		return fmt.Errorf("update run phase working: %w", err)
 	}
 
-	maxWorkers := o.cfg.MaxWorkers
+	// Per-run cap wins (resolved + persisted at submit time). Fall back to the
+	// daemon-wide config for older rows that predate the column, then the
+	// built-in default.
+	maxWorkers := int(r.MaxWorkers)
+	if maxWorkers < 1 {
+		maxWorkers = o.cfg.MaxWorkers
+	}
 	if maxWorkers < 1 {
 		maxWorkers = defaultMaxWorkers
 	}

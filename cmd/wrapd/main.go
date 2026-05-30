@@ -68,7 +68,7 @@ func main() {
 	}
 	defer s.Close()
 
-	srv := api.NewServer(s, *socket)
+	srv := api.NewServer(s, *socket, *maxWorkers)
 	srvErrCh := make(chan error, 1)
 	go func() { srvErrCh <- srv.Serve() }()
 
