@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Lithial/ManageBot/internal/intake"
+	"github.com/Lithial/ManageBot/internal/store"
 	"github.com/Lithial/ManageBot/internal/testutil"
 )
 
@@ -49,6 +50,40 @@ func TestGetRun_pendingHasNoPlan(t *testing.T) {
 	}
 	if got.PlanMD != "" {
 		t.Errorf("PlanMD should be empty for pending run, got %q", got.PlanMD)
+	}
+}
+
+func TestGetRun_exposesMergeResult(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "done"})
+	if _, err := st.InsertEvent(ctx, store.Event{
+		RunID: rid, Kind: "merge_done",
+		PayloadJSON: `{"branch":"wrap/` + rid + `/merge","summary":"all merged"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := c.Get("http://wrap/runs/" + rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got intake.GetRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != "done" {
+		t.Errorf("Phase = %q, want done", got.Phase)
+	}
+	if got.MergeSummary != "all merged" {
+		t.Errorf("MergeSummary = %q, want %q", got.MergeSummary, "all merged")
+	}
+	if got.MergeBranch != "wrap/"+rid+"/merge" {
+		t.Errorf("MergeBranch = %q, want %q", got.MergeBranch, "wrap/"+rid+"/merge")
 	}
 }
 

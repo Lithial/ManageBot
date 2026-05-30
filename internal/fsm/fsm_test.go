@@ -65,6 +65,12 @@ func TestAdvanceTransitions(t *testing.T) {
 		{"working->failed on work_failed", fsm.PhaseWorking, fsm.EventWorkFailed, fsm.PhaseFailed, false},
 		{"invalid: plan_gate->merging directly", fsm.PhasePlanGate, fsm.EventWorkDone, "", true},
 		{"invalid: working->working on work_start", fsm.PhaseWorking, fsm.EventWorkStart, "", true},
+		// Phase 4 transitions.
+		{"merging->merge_gate on merge_done", fsm.PhaseMerging, fsm.EventMergeDone, fsm.PhaseMergeGate, false},
+		{"merging->failed on merge_failed", fsm.PhaseMerging, fsm.EventMergeFailed, fsm.PhaseFailed, false},
+		{"merge_gate->done on gate_approve", fsm.PhaseMergeGate, fsm.EventGateApprove, fsm.PhaseDone, false},
+		{"invalid: merging->done directly", fsm.PhaseMerging, fsm.EventGateApprove, "", true},
+		{"invalid: merge_gate->merging", fsm.PhaseMergeGate, fsm.EventMergeDone, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

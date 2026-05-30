@@ -76,9 +76,15 @@ var transitions = map[Phase]map[Event]Phase{
 		EventWorkDone:   PhaseMerging,
 		EventWorkFailed: PhaseFailed,
 	},
-	// Phase 4 fills in merging/merge_gate. Listed here for the kill-from-any rule.
-	PhaseMerging:   {},
-	PhaseMergeGate: {},
+	PhaseMerging: {
+		EventMergeDone:   PhaseMergeGate,
+		EventMergeFailed: PhaseFailed,
+	},
+	PhaseMergeGate: {
+		// Phase 4 auto-advances this (no gate engine until Phase 5), same scaffold
+		// as the plan gate. Phase 5 gates gate_approve behind merge-gate approval.
+		EventGateApprove: PhaseDone,
+	},
 }
 
 // Advance returns the new phase after applying event to from. It returns

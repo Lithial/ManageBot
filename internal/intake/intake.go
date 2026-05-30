@@ -27,9 +27,11 @@ type ErrorResponse struct {
 
 // GetRunResponse is the body of GET /runs/{id}.
 type GetRunResponse struct {
-	RunID     string `json:"run_id"`
-	ProjectID string `json:"project_id"`
-	Phase     string `json:"phase"`
-	PlanMD    string `json:"plan_md,omitempty"`
-	TasksJSON string `json:"tasks_json,omitempty"`
+	RunID        string `json:"run_id"`
+	ProjectID    string `json:"project_id"`
+	Phase        string `json:"phase"`
+	PlanMD       string `json:"plan_md,omitempty"`
+	TasksJSON    string `json:"tasks_json,omitempty"`
+	MergeBranch  string `json:"merge_branch,omitempty"`  // set once the merger has produced a branch
+	MergeSummary string `json:"merge_summary,omitempty"` // the merger's report_done summary
 }

@@ -99,6 +99,20 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	} else if !errors.Is(err, store.ErrNotFound) {
 		log.Printf("api: get plan: %v", err)
 	}
+
+	// Merge result, once produced, lives in the latest merge_done event.
+	if ev, err := s.store.LatestEventByKind(ctx, id, "merge_done"); err == nil {
+		var p struct {
+			Branch  string `json:"branch"`
+			Summary string `json:"summary"`
+		}
+		if json.Unmarshal([]byte(ev.PayloadJSON), &p) == nil {
+			out.MergeBranch = p.Branch
+			out.MergeSummary = p.Summary
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		log.Printf("api: get merge event: %v", err)
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

@@ -1,0 +1,190 @@
+package orchestrator
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"path/filepath"
+	"strings"
+
+	"github.com/Lithial/ManageBot/internal/fsm"
+	"github.com/Lithial/ManageBot/internal/store"
+	"github.com/Lithial/ManageBot/internal/supervisor"
+	"github.com/Lithial/ManageBot/internal/worktree"
+)
+
+// driveMerger advances a single run merging → (merge_gate | failed). It gathers
+// the surviving worker branches (status done) and their summaries, spawns one
+// merger subprocess in a wrap/<run>/merge worktree, and on report_done + exit 0
+// records a merge_done event and advances to merge_gate; otherwise the run fails.
+//
+// If no MergerCmd is configured the run rests at merging (returns nil) — merging
+// is automatic work, but without a merger binary there is nothing to drive.
+//
+// The merge worktree/branch is RETAINED (the output artifact), like worker
+// worktrees.
+func (o *Orchestrator) driveMerger(ctx context.Context, r store.Run) error {
+	if o.cfg.MergerCmd == nil {
+		return nil
+	}
+
+	proj, err := o.cfg.Store.GetProject(ctx, r.ProjectID)
+	if err != nil {
+		return fmt.Errorf("get project: %w", err)
+	}
+
+	survivors, err := o.survivingBranches(ctx, r.ID)
+	if err != nil {
+		return err
+	}
+	if len(survivors) == 0 {
+		// FSM should not have reached merging with zero done workers, but guard.
+		log.Printf("orchestrator: run %s merging with no surviving workers", r.ID)
+		return o.failMerge(ctx, r.ID)
+	}
+
+	branch := fmt.Sprintf("wrap/%s/merge", r.ID)
+	subpath := filepath.Join("runs", r.ID, "merge")
+	wt, err := o.wt.Add(ctx, worktree.AddRequest{
+		RepoPath: proj.RepoPath,
+		Branch:   branch,
+		BaseRef:  "HEAD",
+		Subpath:  subpath,
+	})
+	if err != nil {
+		log.Printf("orchestrator: run %s merge worktree add: %v", r.ID, err)
+		return o.failMerge(ctx, r.ID)
+	}
+
+	mergeContext := buildMergeContext(survivors, proj.VerificationCommand)
+	cmd := o.cfg.MergerCmd(mergeContext)
+	cmd.Dir = wt.Path
+
+	stepCtx := ctx
+	if o.cfg.StepTimeout > 0 {
+		var cancel context.CancelFunc
+		stepCtx, cancel = context.WithTimeout(ctx, o.cfg.StepTimeout)
+		defer cancel()
+	}
+	out, err := supervisor.Run(stepCtx, supervisor.Request{
+		Cmd:          cmd,
+		StdinPayload: []byte(mergeContext),
+	})
+	if err != nil {
+		log.Printf("orchestrator: run %s supervise merger: %v", r.ID, err)
+		return o.failMerge(ctx, r.ID)
+	}
+	if out.MalformedLines > 0 {
+		log.Printf("orchestrator: run %s merger emitted %d malformed lines (protocol bug)", r.ID, out.MalformedLines)
+	}
+
+	// The merger reports done the same way a worker does (report_done + exit 0).
+	status, summary, _ := interpretWorkerOutcome(out)
+	if status != statusDone {
+		logPlannerStderrTail(r.ID, out)
+		return o.failMerge(ctx, r.ID)
+	}
+
+	payload, _ := json.Marshal(map[string]string{"branch": branch, "summary": summary})
+	if _, err := o.cfg.Store.InsertEvent(ctx, store.Event{
+		RunID: r.ID, Kind: "merge_done", PayloadJSON: string(payload),
+	}); err != nil {
+		log.Printf("orchestrator: run %s record merge_done: %v", r.ID, err)
+	}
+
+	next, err := fsm.Advance(fsm.PhaseMerging, fsm.EventMergeDone)
+	if err != nil {
+		return fmt.Errorf("fsm merge_done: %w", err)
+	}
+	if err := o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(next)); err != nil {
+		return fmt.Errorf("update run phase merge_gate: %w", err)
+	}
+	return nil
+}
+
+// driveMergeGate advances a run merge_gate → done (the Phase 4 auto-gate
+// scaffold) and records a run_done event — the "basic emission" signal. Phase 5
+// replaces the auto-advance with real merge-gate approval.
+func (o *Orchestrator) driveMergeGate(ctx context.Context, r store.Run) error {
+	next, err := fsm.Advance(fsm.PhaseMergeGate, fsm.EventGateApprove)
+	if err != nil {
+		return fmt.Errorf("fsm gate_approve: %w", err)
+	}
+	if err := o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(next)); err != nil {
+		return fmt.Errorf("update run phase done: %w", err)
+	}
+	payload, _ := json.Marshal(map[string]string{"merge_branch": fmt.Sprintf("wrap/%s/merge", r.ID)})
+	if _, err := o.cfg.Store.InsertEvent(ctx, store.Event{
+		RunID: r.ID, Kind: "run_done", PayloadJSON: string(payload),
+	}); err != nil {
+		log.Printf("orchestrator: run %s record run_done: %v", r.ID, err)
+	}
+	return nil
+}
+
+// mergeInput pairs a surviving worker's branch with its reported summary.
+type mergeInput struct {
+	Branch  string
+	TaskID  string
+	Summary string
+}
+
+// survivingBranches returns the branches of workers that reached `done`, paired
+// with the summaries they reported (from worker_done events).
+func (o *Orchestrator) survivingBranches(ctx context.Context, runID string) ([]mergeInput, error) {
+	workers, err := o.cfg.Store.ListWorkersByRun(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list workers: %w", err)
+	}
+	summaries := make(map[string]string) // worker_id → summary
+	events, err := o.cfg.Store.ListEventsByRun(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list events: %w", err)
+	}
+	for _, e := range events {
+		if e.Kind != "worker_done" || e.WorkerID == "" {
+			continue
+		}
+		var p struct {
+			Summary string `json:"summary"`
+		}
+		if json.Unmarshal([]byte(e.PayloadJSON), &p) == nil {
+			summaries[e.WorkerID] = p.Summary
+		}
+	}
+	var out []mergeInput
+	for _, w := range workers {
+		if w.Status != string(statusDone) {
+			continue
+		}
+		out = append(out, mergeInput{Branch: w.Branch, TaskID: w.TaskID, Summary: summaries[w.ID]})
+	}
+	return out, nil
+}
+
+// buildMergeContext renders the merger's stdin payload: the branches to merge,
+// their summaries, and the verification command to run after merging.
+func buildMergeContext(inputs []mergeInput, verificationCommand string) string {
+	var b strings.Builder
+	b.WriteString("Merge the following worker branches into the current branch.\n\n")
+	for _, in := range inputs {
+		fmt.Fprintf(&b, "- branch %s (task %s): %s\n", in.Branch, in.TaskID, in.Summary)
+	}
+	if verificationCommand != "" {
+		fmt.Fprintf(&b, "\nAfter merging, run the verification command and only report done if it passes:\n  %s\n", verificationCommand)
+	}
+	return b.String()
+}
+
+// failMerge transitions a run merging → failed.
+func (o *Orchestrator) failMerge(ctx context.Context, runID string) error {
+	next, err := fsm.Advance(fsm.PhaseMerging, fsm.EventMergeFailed)
+	if err != nil {
+		return fmt.Errorf("fsm merge_failed: %w", err)
+	}
+	if err := o.cfg.Store.UpdateRunPhase(ctx, runID, string(next)); err != nil {
+		return fmt.Errorf("update run phase failed: %w", err)
+	}
+	return nil
+}
