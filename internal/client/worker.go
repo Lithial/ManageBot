@@ -41,6 +41,11 @@ func (c *Client) WorkerReportBlocked(ctx context.Context, workerID, reason strin
 	return c.workerPost(ctx, workerID, "blocked", intake.WorkerReportRequest{Reason: reason})
 }
 
+// WorkerReportPlan records a planner's structured plan (wrap.report_plan).
+func (c *Client) WorkerReportPlan(ctx context.Context, workerID, planMD, tasksJSON string) error {
+	return c.workerPost(ctx, workerID, "plan", intake.WorkerReportRequest{PlanMD: planMD, TasksJSON: tasksJSON})
+}
+
 func (c *Client) workerGet(ctx context.Context, workerID, sub string, out any) error {
 	url := "http://wrap/workers/" + workerID + "/" + sub
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

@@ -83,10 +83,12 @@ type SiblingTasksResponse struct {
 	Titles []string `json:"titles"`
 }
 
-// WorkerReportRequest is the body of POST /workers/{id}/progress|done|blocked.
-// Each endpoint reads the field it cares about.
+// WorkerReportRequest is the body of POST /workers/{id}/progress|done|blocked|plan.
+// Each endpoint reads the field(s) it cares about.
 type WorkerReportRequest struct {
-	Msg     string `json:"msg,omitempty"`
-	Summary string `json:"summary,omitempty"`
-	Reason  string `json:"reason,omitempty"`
+	Msg       string `json:"msg,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	PlanMD    string `json:"plan_md,omitempty"`
+	TasksJSON string `json:"tasks_json,omitempty"`
 }

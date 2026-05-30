@@ -29,11 +29,14 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/Lithial/ManageBot/internal/client"
 )
 
 type action struct {
@@ -66,6 +69,12 @@ func runScript(path string) int {
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
+
+	// Two transports: when the orchestrator scopes us to a worker (WRAP_WORKER_ID +
+	// WRAP_MCP_SOCKET), report via the daemon's worker endpoints (simulating
+	// claude + the wrap-mcp bridge). Otherwise emit the legacy NDJSON on stdout.
+	rep := pickReporter(out)
+
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -78,38 +87,23 @@ func runScript(path string) int {
 		}
 		switch a.Kind {
 		case "progress":
-			if err := emitJSON(out, map[string]any{
-				"method": "report_progress",
-				"params": map[string]any{"msg": a.Msg},
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "fake-claude: emit progress: %v\n", err)
+			if err := rep.progress(a.Msg); err != nil {
+				fmt.Fprintf(os.Stderr, "fake-claude: report progress: %v\n", err)
 				return 1
 			}
 		case "plan":
-			if err := emitJSON(out, map[string]any{
-				"method": "report_plan",
-				"params": map[string]any{
-					"plan_md":    a.PlanMD,
-					"tasks_json": a.TasksJSON,
-				},
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "fake-claude: emit plan: %v\n", err)
+			if err := rep.plan(a.PlanMD, a.TasksJSON); err != nil {
+				fmt.Fprintf(os.Stderr, "fake-claude: report plan: %v\n", err)
 				return 1
 			}
 		case "done":
-			if err := emitJSON(out, map[string]any{
-				"method": "report_done",
-				"params": map[string]any{"summary": a.Summary},
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "fake-claude: emit done: %v\n", err)
+			if err := rep.done(a.Summary); err != nil {
+				fmt.Fprintf(os.Stderr, "fake-claude: report done: %v\n", err)
 				return 1
 			}
 		case "blocked":
-			if err := emitJSON(out, map[string]any{
-				"method": "report_blocked",
-				"params": map[string]any{"reason": a.Reason},
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "fake-claude: emit blocked: %v\n", err)
+			if err := rep.blocked(a.Reason); err != nil {
+				fmt.Fprintf(os.Stderr, "fake-claude: report blocked: %v\n", err)
 				return 1
 			}
 		case "stderr":
@@ -132,6 +126,57 @@ func runScript(path string) int {
 		return 1
 	}
 	return 0
+}
+
+// reporter abstracts how a scripted report is delivered: NDJSON on stdout, or
+// MCP-style calls to the daemon's worker endpoints.
+type reporter interface {
+	progress(msg string) error
+	plan(planMD, tasksJSON string) error
+	done(summary string) error
+	blocked(reason string) error
+}
+
+func pickReporter(out *bufio.Writer) reporter {
+	wid := os.Getenv("WRAP_WORKER_ID")
+	sock := os.Getenv("WRAP_MCP_SOCKET")
+	if wid != "" && sock != "" {
+		return &mcpReporter{c: client.New(sock), wid: wid}
+	}
+	return &ndjsonReporter{out: out}
+}
+
+type ndjsonReporter struct{ out *bufio.Writer }
+
+func (r *ndjsonReporter) progress(msg string) error {
+	return emitJSON(r.out, map[string]any{"method": "report_progress", "params": map[string]any{"msg": msg}})
+}
+func (r *ndjsonReporter) plan(planMD, tasksJSON string) error {
+	return emitJSON(r.out, map[string]any{"method": "report_plan", "params": map[string]any{"plan_md": planMD, "tasks_json": tasksJSON}})
+}
+func (r *ndjsonReporter) done(summary string) error {
+	return emitJSON(r.out, map[string]any{"method": "report_done", "params": map[string]any{"summary": summary}})
+}
+func (r *ndjsonReporter) blocked(reason string) error {
+	return emitJSON(r.out, map[string]any{"method": "report_blocked", "params": map[string]any{"reason": reason}})
+}
+
+type mcpReporter struct {
+	c   *client.Client
+	wid string
+}
+
+func (r *mcpReporter) progress(msg string) error {
+	return r.c.WorkerReportProgress(context.Background(), r.wid, msg)
+}
+func (r *mcpReporter) plan(planMD, tasksJSON string) error {
+	return r.c.WorkerReportPlan(context.Background(), r.wid, planMD, tasksJSON)
+}
+func (r *mcpReporter) done(summary string) error {
+	return r.c.WorkerReportDone(context.Background(), r.wid, summary)
+}
+func (r *mcpReporter) blocked(reason string) error {
+	return r.c.WorkerReportBlocked(context.Background(), r.wid, reason)
 }
 
 func emitJSON(w *bufio.Writer, v any) error {

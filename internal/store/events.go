@@ -75,6 +75,21 @@ func (s *Store) ListEventsByRun(ctx context.Context, runID string) ([]Event, err
 	return out, nil
 }
 
+// LatestWorkerEventByKind returns the most recent event of the given kind scoped
+// to a specific worker, or ErrNotFound. Used to read a worker's reported MCP
+// outcome (worker_report_done/blocked/plan) after its process exits.
+func (s *Store) LatestWorkerEventByKind(ctx context.Context, workerID, kind string) (Event, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+eventColumns+` FROM events WHERE worker_id = ? AND kind = ? ORDER BY id DESC LIMIT 1`, workerID, kind)
+	e, err := scanEvent(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Event{}, fmt.Errorf("latest %q event for worker %q: %w", kind, workerID, ErrNotFound)
+		}
+		return Event{}, fmt.Errorf("latest %q event for worker %q: %w", kind, workerID, err)
+	}
+	return e, nil
+}
+
 // LatestEventByKind returns the most recent event of the given kind for a run,
 // or ErrNotFound if none exists.
 func (s *Store) LatestEventByKind(ctx context.Context, runID, kind string) (Event, error) {

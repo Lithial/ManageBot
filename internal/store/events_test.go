@@ -67,6 +67,30 @@ func TestLatestEventByKind(t *testing.T) {
 	}
 }
 
+func TestLatestWorkerEventByKind(t *testing.T) {
+	ctx := context.Background()
+	s := openTempStore(t)
+	pid, _ := s.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/repo", DefaultGatesJSON: "{}"})
+	rid, _ := s.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}"})
+	w1, _ := s.InsertWorker(ctx, store.Worker{RunID: rid, TaskID: "t1", Branch: "b1", WorktreePath: "/w1"})
+	w2, _ := s.InsertWorker(ctx, store.Worker{RunID: rid, TaskID: "t2", Branch: "b2", WorktreePath: "/w2"})
+
+	_, _ = s.InsertEvent(ctx, store.Event{RunID: rid, WorkerID: w1, Kind: "worker_report_done", PayloadJSON: `{"summary":"one"}`})
+	_, _ = s.InsertEvent(ctx, store.Event{RunID: rid, WorkerID: w2, Kind: "worker_report_done", PayloadJSON: `{"summary":"two"}`})
+
+	got, err := s.LatestWorkerEventByKind(ctx, w2, "worker_report_done")
+	if err != nil {
+		t.Fatalf("LatestWorkerEventByKind: %v", err)
+	}
+	if got.PayloadJSON != `{"summary":"two"}` {
+		t.Errorf("payload = %q, want worker w2's", got.PayloadJSON)
+	}
+
+	if _, err := s.LatestWorkerEventByKind(ctx, w1, "worker_report_blocked"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound for absent kind", err)
+	}
+}
+
 func TestLatestEventByKind_notFound(t *testing.T) {
 	ctx := context.Background()
 	s := openTempStore(t)
