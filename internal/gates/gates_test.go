@@ -60,3 +60,28 @@ func TestParse_emptyStringIsEmptyPolicy(t *testing.T) {
 		t.Errorf("Mode(plan) = %q, want require_approval", got)
 	}
 }
+
+func TestValidAction(t *testing.T) {
+	cases := []struct {
+		kind, action string
+		want         bool
+	}{
+		{"plan", "proceed", true},
+		{"plan", "abort", true},
+		{"plan", "", true},              // empty = default decision semantics
+		{"merge", "drop_branch", false}, // not a merge-gate action
+		{"worker_blocked", "proceed", true},
+		{"worker_blocked", "retry", true},
+		{"worker_blocked", "abort", true},
+		{"worker_blocked", "drop_branch", false},
+		{"merge_conflict", "drop_branch", true},
+		{"merge_conflict", "takeover", true},
+		{"merge_conflict", "abort", true},
+		{"merge_conflict", "retry", false},
+	}
+	for _, c := range cases {
+		if got := gates.ValidAction(c.kind, c.action); got != c.want {
+			t.Errorf("ValidAction(%q,%q)=%v want %v", c.kind, c.action, got, c.want)
+		}
+	}
+}
