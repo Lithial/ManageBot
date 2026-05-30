@@ -7,8 +7,43 @@ import (
 
 	"github.com/Lithial/ManageBot/internal/client"
 	"github.com/Lithial/ManageBot/internal/intake"
+	"github.com/Lithial/ManageBot/internal/store"
 	"github.com/Lithial/ManageBot/internal/testutil"
 )
+
+func TestClientApprove(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := client.New(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "plan_gate"})
+	gid, _ := st.InsertGate(ctx, store.Gate{RunID: rid, Kind: "plan", PayloadJSON: "{}"})
+
+	resp, err := c.Approve(ctx, rid, "bob")
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if resp.GateID != gid || resp.Status != "approved" {
+		t.Errorf("resp = %+v", resp)
+	}
+	g, _ := st.LatestGateByKind(ctx, rid, "plan")
+	if g.Status != "approved" || g.ResolvedBy != "bob" {
+		t.Errorf("gate = %+v", g)
+	}
+}
+
+func TestClientReject_noPendingGate(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := client.New(sock)
+	ctx := context.Background()
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "working"})
+
+	if _, err := c.Reject(ctx, rid, ""); err == nil {
+		t.Fatal("Reject with no pending gate: want error, got nil")
+	}
+}
 
 func TestClientSubmitRun(t *testing.T) {
 	sock := testutil.StartInProcessServer(t)
