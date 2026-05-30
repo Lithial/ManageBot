@@ -17,11 +17,12 @@ import (
 	"github.com/Lithial/ManageBot/internal/testutil"
 )
 
-// TestWorkerPhaseHappyPath exercises the full Phase 3 path end-to-end through
-// the real wrapd binary: pending → planning → plan_gate → working → merging.
-// The planner and workers are both fake-claude, each driven by its own script
-// via a distinct FAKE_CLAUDE_SCRIPT in --planner-env / --worker-env.
-func TestWorkerPhaseHappyPath(t *testing.T) {
+// TestFullRunHappyPath exercises the full path end-to-end through the real
+// wrapd binary: pending → planning → plan_gate → working → merging → merge_gate
+// → done. Planner, workers, and merger are all fake-claude, each driven by its
+// own script via a distinct FAKE_CLAUDE_SCRIPT in --planner-env/--worker-env/
+// --merger-env.
+func TestFullRunHappyPath(t *testing.T) {
 	wrapdBin, err := testutil.LocateBinary("wrapd")
 	if err != nil {
 		t.Fatalf("locate wrapd: %v (did you run `make wrapd`?)", err)
@@ -60,12 +61,23 @@ func TestWorkerPhaseHappyPath(t *testing.T) {
 	if err := os.WriteFile(workerScript, []byte(strings.Join(workerLines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	mergerScript := filepath.Join(scriptDir, "merger.jsonl")
+	mergerLines := []string{
+		`{"kind":"progress","msg":"merging"}`,
+		`{"kind":"done","summary":"merged all worker branches"}`,
+		`{"kind":"exit","code":0}`,
+	}
+	if err := os.WriteFile(mergerScript, []byte(strings.Join(mergerLines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	d := testutil.StartTestDaemon(t, wrapdBin,
 		"--planner-cmd", fakeClaude,
 		"--planner-env", "FAKE_CLAUDE_SCRIPT="+plannerScript,
 		"--worker-cmd", fakeClaude,
 		"--worker-env", "FAKE_CLAUDE_SCRIPT="+workerScript,
+		"--merger-cmd", fakeClaude,
+		"--merger-env", "FAKE_CLAUDE_SCRIPT="+mergerScript,
 		"--auto-advance-gates",
 		"--tick-interval", "100ms",
 	)
@@ -97,7 +109,7 @@ func TestWorkerPhaseHappyPath(t *testing.T) {
 			t.Fatalf("decode get-run response: %v", err)
 		}
 		resp.Body.Close()
-		if got.Phase == "merging" {
+		if got.Phase == "done" {
 			break
 		}
 		if got.Phase == "failed" {
@@ -105,7 +117,13 @@ func TestWorkerPhaseHappyPath(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if got.Phase != "merging" {
-		t.Fatalf("phase = %q after wait, want merging (response: %+v)", got.Phase, got)
+	if got.Phase != "done" {
+		t.Fatalf("phase = %q after wait, want done (response: %+v)", got.Phase, got)
+	}
+	if !strings.Contains(got.MergeSummary, "merged all worker branches") {
+		t.Errorf("MergeSummary = %q, want the merger's summary", got.MergeSummary)
+	}
+	if !strings.Contains(got.MergeBranch, "/merge") {
+		t.Errorf("MergeBranch = %q, want a wrap/<run>/merge branch", got.MergeBranch)
 	}
 }
