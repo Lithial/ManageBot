@@ -67,9 +67,16 @@ var transitions = map[Phase]map[Event]Phase{
 		EventPlanDone:   PhasePlanGate,
 		EventPlanFailed: PhaseFailed,
 	},
-	// Phases 3-5 will fill in the rest. Listed here for the kill-from-any rule.
-	PhasePlanGate:  {},
-	PhaseWorking:   {},
+	PhasePlanGate: {
+		// Phase 3 auto-advances this (no gate engine until Phase 5). Phase 5 will
+		// gate the work_start event behind plan-gate approval.
+		EventWorkStart: PhaseWorking,
+	},
+	PhaseWorking: {
+		EventWorkDone:   PhaseMerging,
+		EventWorkFailed: PhaseFailed,
+	},
+	// Phase 4 fills in merging/merge_gate. Listed here for the kill-from-any rule.
 	PhaseMerging:   {},
 	PhaseMergeGate: {},
 }
