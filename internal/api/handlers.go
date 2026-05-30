@@ -15,6 +15,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /runs", s.handleSubmitRun)
 	mux.HandleFunc("GET /runs/{id}", s.handleGetRun)
+	mux.HandleFunc("POST /runs/{id}/approve", s.handleResolveGate("approved"))
+	mux.HandleFunc("POST /runs/{id}/reject", s.handleResolveGate("rejected"))
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -113,7 +115,54 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	} else if !errors.Is(err, store.ErrNotFound) {
 		log.Printf("api: get merge event: %v", err)
 	}
+
+	// Surface a gate awaiting human resolution, if any.
+	if g, err := s.store.PendingGateByRun(ctx, id); err == nil {
+		out.PendingGateKind = g.Kind
+		out.PendingGateID = g.ID
+	} else if !errors.Is(err, store.ErrNotFound) {
+		log.Printf("api: get pending gate: %v", err)
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleResolveGate returns a handler that resolves a run's current pending gate
+// to `status` (approved | rejected). The orchestrator observes the resolution on
+// its next tick and advances the FSM; the API never mutates run phase directly.
+func (s *Server) handleResolveGate(status string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		ctx := r.Context()
+
+		// Body is optional; default resolver is "cli".
+		req := intake.ResolveGateRequest{}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&req) // tolerate empty/invalid body
+		}
+		by := req.By
+		if by == "" {
+			by = "cli"
+		}
+
+		gate, err := s.store.PendingGateByRun(ctx, id)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeError(w, http.StatusConflict, "no pending gate for this run")
+				return
+			}
+			log.Printf("api: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		if err := s.store.ResolveGate(ctx, gate.ID, status, by); err != nil {
+			log.Printf("api: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		writeJSON(w, http.StatusOK, intake.ResolveGateResponse{
+			RunID: id, GateID: gate.ID, Status: status,
+		})
+	}
 }
 
 func (s *Server) findOrCreateProject(ctx context.Context, req intake.SubmitRunRequest) (string, error) {

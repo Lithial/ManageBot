@@ -34,4 +34,19 @@ type GetRunResponse struct {
 	TasksJSON    string `json:"tasks_json,omitempty"`
 	MergeBranch  string `json:"merge_branch,omitempty"`  // set once the merger has produced a branch
 	MergeSummary string `json:"merge_summary,omitempty"` // the merger's report_done summary
+
+	PendingGateKind string `json:"pending_gate_kind,omitempty"` // kind of the gate awaiting resolution, if any
+	PendingGateID   string `json:"pending_gate_id,omitempty"`   // id of that gate
+}
+
+// ResolveGateRequest is the body of POST /runs/{id}/approve|reject.
+type ResolveGateRequest struct {
+	By string `json:"by,omitempty"` // who resolved it; defaults to "cli"
+}
+
+// ResolveGateResponse is the body of a successful gate resolution.
+type ResolveGateResponse struct {
+	RunID  string `json:"run_id"`
+	GateID string `json:"gate_id"`
+	Status string `json:"status"` // "approved" | "rejected"
 }

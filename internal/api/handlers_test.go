@@ -87,6 +87,98 @@ func TestGetRun_exposesMergeResult(t *testing.T) {
 	}
 }
 
+func TestGetRun_exposesPendingGate(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "plan_gate"})
+	gid, _ := st.InsertGate(ctx, store.Gate{RunID: rid, Kind: "plan", PayloadJSON: "{}"})
+
+	resp, err := c.Get("http://wrap/runs/" + rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got intake.GetRunResponse
+	_ = json.NewDecoder(resp.Body).Decode(&got)
+	if got.PendingGateKind != "plan" {
+		t.Errorf("PendingGateKind = %q, want plan", got.PendingGateKind)
+	}
+	if got.PendingGateID != gid {
+		t.Errorf("PendingGateID = %q, want %q", got.PendingGateID, gid)
+	}
+}
+
+func TestApproveGate(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "plan_gate"})
+	gid, _ := st.InsertGate(ctx, store.Gate{RunID: rid, Kind: "plan", PayloadJSON: "{}"})
+
+	resp, err := c.Post("http://wrap/runs/"+rid+"/approve", "application/json", strings.NewReader(`{"by":"alice"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	g, err := st.LatestGateByKind(ctx, rid, "plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.ID != gid || g.Status != "approved" || g.ResolvedBy != "alice" {
+		t.Errorf("gate after approve = %+v", g)
+	}
+}
+
+func TestRejectGate(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "merge_gate"})
+	_, _ = st.InsertGate(ctx, store.Gate{RunID: rid, Kind: "merge", PayloadJSON: "{}"})
+
+	resp, err := c.Post("http://wrap/runs/"+rid+"/reject", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	g, _ := st.LatestGateByKind(ctx, rid, "merge")
+	if g.Status != "rejected" || g.ResolvedBy != "cli" {
+		t.Errorf("gate after reject = %+v (want rejected, default resolver 'cli')", g)
+	}
+}
+
+func TestApproveGate_noPendingGate(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "working"})
+
+	resp, err := c.Post("http://wrap/runs/"+rid+"/approve", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (no pending gate)", resp.StatusCode)
+	}
+}
+
 func TestGetRun_notFound(t *testing.T) {
 	sock := testutil.StartInProcessServer(t)
 	c := newSocketClient(sock)
