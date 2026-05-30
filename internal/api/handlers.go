@@ -180,6 +180,11 @@ func (s *Server) handleResolveGate(status string) http.HandlerFunc {
 			return
 		}
 		if err := s.store.ResolveGate(ctx, gate.ID, status, by); err != nil {
+			if errors.Is(err, store.ErrGateNotPending) {
+				// Lost the race to a concurrent resolution.
+				writeError(w, http.StatusConflict, "gate already resolved")
+				return
+			}
 			log.Printf("api: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
