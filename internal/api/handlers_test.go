@@ -179,6 +179,44 @@ func TestApproveGate_noPendingGate(t *testing.T) {
 	}
 }
 
+func TestListRuns(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	r1, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "a", GatesJSON: "{}", Phase: "working"})
+	r2, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "b", GatesJSON: "{}", Phase: "plan_gate"})
+	_, _ = st.InsertGate(ctx, store.Gate{RunID: r2, Kind: "plan", PayloadJSON: "{}"})
+
+	resp, err := c.Get("http://wrap/runs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	var got intake.ListRunsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Runs) != 2 {
+		t.Fatalf("len=%d, want 2: %+v", len(got.Runs), got.Runs)
+	}
+	// Newest first: r2 then r1.
+	if got.Runs[0].RunID != r2 || got.Runs[1].RunID != r1 {
+		t.Errorf("order = [%s %s], want [%s %s]", got.Runs[0].RunID, got.Runs[1].RunID, r2, r1)
+	}
+	if got.Runs[0].PendingGateKind != "plan" {
+		t.Errorf("r2 PendingGateKind = %q, want plan", got.Runs[0].PendingGateKind)
+	}
+	if got.Runs[1].PendingGateKind != "" {
+		t.Errorf("r1 PendingGateKind = %q, want empty", got.Runs[1].PendingGateKind)
+	}
+}
+
 func TestGetRun_notFound(t *testing.T) {
 	sock := testutil.StartInProcessServer(t)
 	c := newSocketClient(sock)

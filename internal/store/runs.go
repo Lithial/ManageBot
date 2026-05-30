@@ -167,6 +167,28 @@ func (s *Store) ListRunsByPhase(ctx context.Context, phase string) ([]Run, error
 	return out, nil
 }
 
+// ListRuns returns all runs newest-first (created_at desc, rowid desc to break
+// same-second ties). Used by read clients like the TUI dashboard.
+func (s *Store) ListRuns(ctx context.Context) ([]Run, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+runColumns+` FROM runs ORDER BY created_at DESC, rowid DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list runs: %w", err)
+	}
+	defer rows.Close()
+	var out []Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows err: %w", err)
+	}
+	return out, nil
+}
+
 // GetProject returns a project by id. Companion to ProjectByName.
 func (s *Store) GetProject(ctx context.Context, id string) (Project, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = ?`, id)

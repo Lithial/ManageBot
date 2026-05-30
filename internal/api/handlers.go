@@ -14,6 +14,7 @@ import (
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /runs", s.handleSubmitRun)
+	mux.HandleFunc("GET /runs", s.handleListRuns)
 	mux.HandleFunc("GET /runs/{id}", s.handleGetRun)
 	mux.HandleFunc("POST /runs/{id}/approve", s.handleResolveGate("approved"))
 	mux.HandleFunc("POST /runs/{id}/reject", s.handleResolveGate("rejected"))
@@ -74,6 +75,28 @@ func (s *Server) handleSubmitRun(w http.ResponseWriter, r *http.Request) {
 		ProjectID: pid,
 		Phase:     "pending",
 	})
+}
+
+func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	runs, err := s.store.ListRuns(ctx)
+	if err != nil {
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	out := intake.ListRunsResponse{Runs: make([]intake.RunSummary, 0, len(runs))}
+	for _, run := range runs {
+		summary := intake.RunSummary{RunID: run.ID, Phase: run.Phase}
+		// Annotate rows awaiting a human decision so the dashboard can flag them.
+		if g, err := s.store.PendingGateByRun(ctx, run.ID); err == nil {
+			summary.PendingGateKind = g.Kind
+		} else if !errors.Is(err, store.ErrNotFound) {
+			log.Printf("api: pending gate for %s: %v", run.ID, err)
+		}
+		out.Runs = append(out.Runs, summary)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {

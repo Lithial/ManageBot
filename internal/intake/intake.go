@@ -39,6 +39,18 @@ type GetRunResponse struct {
 	PendingGateID   string `json:"pending_gate_id,omitempty"`   // id of that gate
 }
 
+// RunSummary is one entry in the GET /runs list (TUI dashboard row).
+type RunSummary struct {
+	RunID           string `json:"run_id"`
+	Phase           string `json:"phase"`
+	PendingGateKind string `json:"pending_gate_kind,omitempty"`
+}
+
+// ListRunsResponse is the body of GET /runs.
+type ListRunsResponse struct {
+	Runs []RunSummary `json:"runs"`
+}
+
 // ResolveGateRequest is the body of POST /runs/{id}/approve|reject.
 type ResolveGateRequest struct {
 	By string `json:"by,omitempty"` // who resolved it; defaults to "cli"
