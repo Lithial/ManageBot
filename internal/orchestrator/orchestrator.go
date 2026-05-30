@@ -29,12 +29,19 @@ type PlannerCmdFunc func(specMD string) *exec.Cmd
 // production wiring passes the task description on stdin.
 type WorkerCmdFunc func(taskDescription string) *exec.Cmd
 
+// MergerCmdFunc returns a freshly-configured *exec.Cmd for the merger
+// subprocess. It is called once per run; the merge context (surviving branches,
+// summaries, verification command) is passed in. Phase 4 wiring passes that
+// context on stdin.
+type MergerCmdFunc func(mergeContext string) *exec.Cmd
+
 type Config struct {
 	Store       *store.Store
 	StateDir    string         // root for worktrees (e.g. ~/.wrap)
 	PlannerCmd  PlannerCmdFunc // factory for the planner subprocess
 	WorkerCmd   WorkerCmdFunc  // factory for worker subprocesses (Phase 3)
-	StepTimeout time.Duration  // per-step timeout for a planner/worker subprocess
+	MergerCmd   MergerCmdFunc  // factory for the merger subprocess (Phase 4)
+	StepTimeout time.Duration  // per-step timeout for a planner/worker/merger subprocess
 
 	// MaxWorkers caps simultaneous worker subprocesses per run (default 4).
 	MaxWorkers int
@@ -82,6 +89,32 @@ func (o *Orchestrator) Tick(ctx context.Context) error {
 		for _, r := range gated {
 			if err := o.driveWorkers(ctx, r); err != nil {
 				log.Printf("orchestrator: run %s workers: %v", r.ID, err)
+			}
+		}
+	}
+
+	// merging → (merge_gate | failed). Merging is automatic work, not a gate, so
+	// it is driven unconditionally; driveMerger self-guards when no MergerCmd is
+	// configured (the run rests at merging).
+	merging, err := o.cfg.Store.ListRunsByPhase(ctx, string(fsm.PhaseMerging))
+	if err != nil {
+		return fmt.Errorf("list merging: %w", err)
+	}
+	for _, r := range merging {
+		if err := o.driveMerger(ctx, r); err != nil {
+			log.Printf("orchestrator: run %s merger: %v", r.ID, err)
+		}
+	}
+
+	// merge_gate → done. Like the plan gate, auto-advanced only when configured.
+	if o.cfg.AutoAdvanceGates {
+		mgated, err := o.cfg.Store.ListRunsByPhase(ctx, string(fsm.PhaseMergeGate))
+		if err != nil {
+			return fmt.Errorf("list merge_gate: %w", err)
+		}
+		for _, r := range mgated {
+			if err := o.driveMergeGate(ctx, r); err != nil {
+				log.Printf("orchestrator: run %s merge_gate: %v", r.ID, err)
 			}
 		}
 	}
