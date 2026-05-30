@@ -45,6 +45,7 @@ func main() {
 	plannerCmd := flag.String("planner-cmd", "claude", "executable to spawn as the planner (Phase 2: bare path; future phases add args)")
 	plannerEnvFlag := flag.String("planner-env", "", "comma-separated KEY=VAL pairs to add to the planner's environment (test helper)")
 	tickInterval := flag.Duration("tick-interval", 500*time.Millisecond, "orchestrator poll interval")
+	stepTimeout := flag.Duration("step-timeout", 5*time.Minute, "per-step timeout for planner subprocess (planner kill budget)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*stateDir, 0o700); err != nil {
@@ -75,23 +76,23 @@ func main() {
 	orch := orchestrator.New(orchestrator.Config{
 		Store:    s,
 		StateDir: *stateDir,
-		PlannerCmd: func(spec string) *exec.Cmd {
+		PlannerCmd: func(_ string) *exec.Cmd {
 			c := exec.Command(*plannerCmd)
 			if len(plannerEnv) > 0 {
 				c.Env = append(os.Environ(), plannerEnv...)
 			}
 			return c
 		},
-		StepTimeout: 5 * time.Minute,
+		StepTimeout: *stepTimeout,
 	})
 	orchCtx, orchCancel := context.WithCancel(context.Background())
 	go orch.Run(orchCtx, *tickInterval)
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	select {
-	case s := <-sig:
-		fmt.Printf("wrapd: caught %s, shutting down\n", s)
+	case sig := <-sigCh:
+		fmt.Printf("wrapd: caught %s, shutting down\n", sig)
 	case err := <-srvErrCh:
 		if err != nil {
 			log.Fatalf("serve: %v", err)
@@ -104,7 +105,7 @@ func main() {
 }
 
 // parseEnvFlag splits "K1=V1,K2=V2" into []string{"K1=V1","K2=V2"}.
-// Empty input returns nil. Pairs without '=' are dropped silently.
+// Empty input returns nil. Pairs without '=' are logged and dropped.
 func parseEnvFlag(s string) []string {
 	if s == "" {
 		return nil
@@ -113,7 +114,11 @@ func parseEnvFlag(s string) []string {
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if p == "" || !strings.Contains(p, "=") {
+		if p == "" {
+			continue
+		}
+		if !strings.Contains(p, "=") {
+			log.Printf("wrapd: --planner-env: ignoring malformed pair %q (no '=')", p)
 			continue
 		}
 		out = append(out, p)
