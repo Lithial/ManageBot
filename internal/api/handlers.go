@@ -57,7 +57,7 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reject any pending gate so it doesn't linger awaiting a decision.
 	if g, err := s.store.PendingGateByRun(ctx, id); err == nil {
-		if err := s.store.ResolveGate(ctx, g.ID, "rejected", "killed_by_user"); err != nil && !errors.Is(err, store.ErrGateNotPending) {
+		if err := s.store.ResolveGate(ctx, g.ID, "rejected", "killed_by_user", ""); err != nil && !errors.Is(err, store.ErrGateNotPending) {
 			log.Printf("api: kill reject gate: %v", err)
 		}
 	} else if !errors.Is(err, store.ErrNotFound) {
@@ -225,7 +225,7 @@ func (s *Server) handleResolveGate(status string) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		if err := s.store.ResolveGate(ctx, gate.ID, status, by); err != nil {
+		if err := s.store.ResolveGate(ctx, gate.ID, status, by, ""); err != nil {
 			if errors.Is(err, store.ErrGateNotPending) {
 				// Lost the race to a concurrent resolution.
 				writeError(w, http.StatusConflict, "gate already resolved")

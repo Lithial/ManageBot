@@ -21,6 +21,7 @@ type Gate struct {
 	PayloadJSON string
 	ResolvedBy  string
 	ResolvedAt  int64
+	Action      string
 	CreatedAt   int64
 }
 
@@ -52,11 +53,11 @@ func (s *Store) InsertGate(ctx context.Context, g Gate) (string, error) {
 	return id, nil
 }
 
-const gateColumns = `id, run_id, kind, status, payload_json, COALESCE(resolved_by, ''), COALESCE(resolved_at, 0), created_at`
+const gateColumns = `id, run_id, kind, status, payload_json, COALESCE(resolved_by, ''), COALESCE(resolved_at, 0), COALESCE(action, ''), created_at`
 
 func scanGate(scanner interface{ Scan(dest ...any) error }) (Gate, error) {
 	var g Gate
-	if err := scanner.Scan(&g.ID, &g.RunID, &g.Kind, &g.Status, &g.PayloadJSON, &g.ResolvedBy, &g.ResolvedAt, &g.CreatedAt); err != nil {
+	if err := scanner.Scan(&g.ID, &g.RunID, &g.Kind, &g.Status, &g.PayloadJSON, &g.ResolvedBy, &g.ResolvedAt, &g.Action, &g.CreatedAt); err != nil {
 		return Gate{}, err
 	}
 	return g, nil
@@ -98,11 +99,11 @@ var ErrGateNotPending = errors.New("gate not pending")
 // resolved_at. The `status='pending'` guard makes concurrent resolution safe:
 // the first writer wins, a later one gets ErrGateNotPending. Returns ErrNotFound
 // if no gate with that id exists at all.
-func (s *Store) ResolveGate(ctx context.Context, id, status, resolvedBy string) error {
+func (s *Store) ResolveGate(ctx context.Context, id, status, resolvedBy, action string) error {
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE gates SET status = ?, resolved_by = ?, resolved_at = ? WHERE id = ? AND status = 'pending'
-	`, status, resolvedBy, now, id)
+		UPDATE gates SET status = ?, resolved_by = ?, resolved_at = ?, action = ? WHERE id = ? AND status = 'pending'
+	`, status, resolvedBy, now, action, id)
 	if err != nil {
 		return fmt.Errorf("resolve gate: %w", err)
 	}
