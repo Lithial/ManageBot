@@ -346,6 +346,33 @@ func TestWorkerReportDone(t *testing.T) {
 	}
 }
 
+func TestWorkerReportPlan(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "planning"})
+	wid, _ := st.InsertWorker(ctx, store.Worker{RunID: rid, TaskID: "__planner__", Branch: "b", WorktreePath: "/wt"})
+
+	body := `{"plan_md":"# The Plan","tasks_json":"[{\"id\":\"t1\",\"title\":\"A\"}]"}`
+	resp, err := c.Post("http://wrap/workers/"+wid+"/plan", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	ev, err := st.LatestWorkerEventByKind(ctx, wid, "worker_report_plan")
+	if err != nil {
+		t.Fatalf("no worker_report_plan event: %v", err)
+	}
+	if !strings.Contains(ev.PayloadJSON, "The Plan") || !strings.Contains(ev.PayloadJSON, "\\\"id\\\":\\\"t1\\\"") {
+		t.Errorf("plan event payload = %q", ev.PayloadJSON)
+	}
+}
+
 func TestWorkerTask_notFound(t *testing.T) {
 	sock := testutil.StartInProcessServer(t)
 	c := newSocketClient(sock)

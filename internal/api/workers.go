@@ -20,6 +20,31 @@ func (s *Server) registerWorkerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /workers/{id}/progress", s.handleWorkerReport("worker_progress"))
 	mux.HandleFunc("POST /workers/{id}/done", s.handleWorkerReport("worker_report_done"))
 	mux.HandleFunc("POST /workers/{id}/blocked", s.handleWorkerReport("worker_report_blocked"))
+	mux.HandleFunc("POST /workers/{id}/plan", s.handleWorkerPlan)
+}
+
+// handleWorkerPlan records a planner's structured plan report (wrap.report_plan).
+func (s *Server) handleWorkerPlan(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx := r.Context()
+	worker, err := s.store.GetWorker(ctx, id)
+	if err != nil {
+		s.writeWorkerErr(w, err)
+		return
+	}
+	var req intake.WorkerReportRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	b, _ := json.Marshal(map[string]string{"plan_md": req.PlanMD, "tasks_json": req.TasksJSON})
+	if _, err := s.store.InsertEvent(ctx, store.Event{
+		RunID: worker.RunID, WorkerID: worker.ID, Kind: "worker_report_plan", PayloadJSON: string(b),
+	}); err != nil {
+		log.Printf("api: worker report plan: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // taskRow is the subset of a plan's tasks_json entry the worker endpoints need.

@@ -25,6 +25,7 @@ type workerAPI interface {
 	WorkerReportProgress(ctx context.Context, workerID, msg string) error
 	WorkerReportDone(ctx context.Context, workerID, summary string) error
 	WorkerReportBlocked(ctx context.Context, workerID, reason string) error
+	WorkerReportPlan(ctx context.Context, workerID, planMD, tasksJSON string) error
 }
 
 type emptyIn struct{}
@@ -37,6 +38,10 @@ type doneIn struct {
 }
 type blockedIn struct {
 	Reason string `json:"reason" jsonschema:"why the worker is stuck and needs human help"`
+}
+type planIn struct {
+	PlanMD    string `json:"plan_md" jsonschema:"the plan as markdown"`
+	TasksJSON string `json:"tasks_json" jsonschema:"the tasks as a JSON array of {id,title,description,depends_on}"`
 }
 
 // newServer builds the MCP server exposing the wrap.* tools for one worker.
@@ -54,6 +59,10 @@ func newServer(api workerAPI, workerID string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "report_blocked", Description: "Signal that you are blocked and need human help."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in blockedIn) (*mcp.CallToolResult, noOut, error) {
 			return nil, noOut{}, api.WorkerReportBlocked(ctx, workerID, in.Reason)
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "report_plan", Description: "Report the plan (planner only): markdown plus a tasks_json array."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in planIn) (*mcp.CallToolResult, noOut, error) {
+			return nil, noOut{}, api.WorkerReportPlan(ctx, workerID, in.PlanMD, in.TasksJSON)
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "read_task", Description: "Return this worker's task (title and description)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, intake.WorkerTaskResponse, error) {
