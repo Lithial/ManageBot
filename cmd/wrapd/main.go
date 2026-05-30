@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -50,6 +51,8 @@ func main() {
 	mergerEnvFlag := flag.String("merger-env", "", "comma-separated KEY=VAL pairs to add to the merger's environment (test helper)")
 	maxWorkers := flag.Int("max-workers", 4, "max simultaneous worker subprocesses per run")
 	retryBudget := flag.Int("worker-retry-budget", 1, "extra attempts a retryable worker failure (crash/timeout) gets")
+	wrapMcpCmd := flag.String("wrap-mcp-cmd", "wrap-mcp", "path to the wrap-mcp bridge binary claude spawns as its MCP server")
+	promptDir := flag.String("prompt-dir", "", "directory of role system prompts (planner.md/worker.md/merger.md); empty = none")
 	tickInterval := flag.Duration("tick-interval", 500*time.Millisecond, "orchestrator poll interval")
 	stepTimeout := flag.Duration("step-timeout", 5*time.Minute, "per-step timeout for a planner/worker subprocess (kill budget)")
 	flag.Parse()
@@ -81,30 +84,27 @@ func main() {
 	plannerEnv := parseEnvFlag(*plannerEnvFlag)
 	workerEnv := parseEnvFlag(*workerEnvFlag)
 	mergerEnv := parseEnvFlag(*mergerEnvFlag)
+	// spawn builds a per-worker claude command: the --mcp-config points claude's
+	// `wrap` MCP server at the wrap-mcp bridge scoped to this worker, and
+	// --append-system-prompt supplies the role prompt. The same WRAP_WORKER_ID /
+	// WRAP_MCP_SOCKET env also drives fake-claude's MCP mode in tests (it ignores
+	// the claude-only args).
+	spawn := func(bin string, extraEnv []string, role, workerID string) *exec.Cmd {
+		args := []string{"-p", "--mcp-config", mcpConfigJSON(*wrapMcpCmd, *socket, workerID)}
+		if *promptDir != "" {
+			args = append(args, "--append-system-prompt", filepath.Join(*promptDir, role+".md"))
+		}
+		c := exec.Command(bin, args...)
+		c.Env = append(os.Environ(), extraEnv...)
+		c.Env = append(c.Env, "WRAP_WORKER_ID="+workerID, "WRAP_MCP_SOCKET="+*socket)
+		return c
+	}
 	orch := orchestrator.New(orchestrator.Config{
-		Store:    s,
-		StateDir: *stateDir,
-		PlannerCmd: func(_ string) *exec.Cmd {
-			c := exec.Command(*plannerCmd)
-			if len(plannerEnv) > 0 {
-				c.Env = append(os.Environ(), plannerEnv...)
-			}
-			return c
-		},
-		WorkerCmd: func(_ string) *exec.Cmd {
-			c := exec.Command(*workerCmd)
-			if len(workerEnv) > 0 {
-				c.Env = append(os.Environ(), workerEnv...)
-			}
-			return c
-		},
-		MergerCmd: func(_ string) *exec.Cmd {
-			c := exec.Command(*mergerCmd)
-			if len(mergerEnv) > 0 {
-				c.Env = append(os.Environ(), mergerEnv...)
-			}
-			return c
-		},
+		Store:       s,
+		StateDir:    *stateDir,
+		PlannerCmd:  func(wid string) *exec.Cmd { return spawn(*plannerCmd, plannerEnv, "planner", wid) },
+		WorkerCmd:   func(wid string) *exec.Cmd { return spawn(*workerCmd, workerEnv, "worker", wid) },
+		MergerCmd:   func(wid string) *exec.Cmd { return spawn(*mergerCmd, mergerEnv, "merger", wid) },
 		MaxWorkers:  *maxWorkers,
 		RetryBudget: *retryBudget,
 		StepTimeout: *stepTimeout,
@@ -132,6 +132,21 @@ func main() {
 	if err := srv.Close(); err != nil {
 		log.Printf("wrapd: shutdown error: %v", err)
 	}
+}
+
+// mcpConfigJSON renders the inline --mcp-config claude uses to spawn the wrap
+// MCP server (the wrap-mcp bridge) scoped to one worker.
+func mcpConfigJSON(wrapMcp, socket, workerID string) string {
+	cfg := map[string]any{
+		"mcpServers": map[string]any{
+			"wrap": map[string]any{
+				"command": wrapMcp,
+				"args":    []string{"--socket", socket, "--worker", workerID},
+			},
+		},
+	}
+	b, _ := json.Marshal(cfg)
+	return string(b)
 }
 
 // parseEnvFlag splits "K1=V1,K2=V2" into []string{"K1=V1","K2=V2"}.

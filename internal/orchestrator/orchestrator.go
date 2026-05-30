@@ -21,19 +21,21 @@ import (
 // don't want it on stdin. Phase 2 production wiring passes spec on stdin
 // via supervisor.Request.StdinPayload, so this func only configures the
 // program path, env, and args.
-type PlannerCmdFunc func(specMD string) *exec.Cmd
+// PlannerCmdFunc/WorkerCmdFunc/MergerCmdFunc return a freshly-configured
+// *exec.Cmd for a subprocess, scoped to the given workerID. The workerID lets
+// the caller wire the per-worker MCP config (claude -p --mcp-config ... --worker
+// <id>) so the subprocess reports back via the wrap-mcp bridge. The spec/task/
+// merge content is carried on stdin (see the supervisor Request).
+type PlannerCmdFunc func(workerID string) *exec.Cmd
+type WorkerCmdFunc func(workerID string) *exec.Cmd
+type MergerCmdFunc func(workerID string) *exec.Cmd
 
-// WorkerCmdFunc returns a freshly-configured *exec.Cmd for one worker
-// subprocess. It is called once per task; the task description is passed in so
-// callers can wire it into the command if they don't want it on stdin. Phase 3
-// production wiring passes the task description on stdin.
-type WorkerCmdFunc func(taskDescription string) *exec.Cmd
-
-// MergerCmdFunc returns a freshly-configured *exec.Cmd for the merger
-// subprocess. It is called once per run; the merge context (surviving branches,
-// summaries, verification command) is passed in. Phase 4 wiring passes that
-// context on stdin.
-type MergerCmdFunc func(mergeContext string) *exec.Cmd
+// Reserved task ids for the non-task roles that also get worker rows so they can
+// report via MCP. They are excluded from the merger's surviving-branch set.
+const (
+	taskIDPlanner = "__planner__"
+	taskIDMerger  = "__merger__"
+)
 
 type Config struct {
 	Store       *store.Store

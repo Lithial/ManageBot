@@ -159,7 +159,7 @@ func (o *Orchestrator) runWorkerAttempt(ctx context.Context, r store.Run, proj s
 		return statusFailed, false
 	}
 
-	cmd := o.cfg.WorkerCmd(t.Title)
+	cmd := o.cfg.WorkerCmd(wid)
 	cmd.Dir = wt.Path
 
 	stepCtx := ctx
@@ -190,7 +190,7 @@ func (o *Orchestrator) runWorkerAttempt(ctx context.Context, r store.Run, proj s
 		log.Printf("orchestrator: run %s task %s emitted %d malformed lines (protocol bug)", r.ID, t.ID, out.MalformedLines)
 	}
 
-	status, summary, reason := interpretWorkerOutcome(out)
+	status, summary, reason := o.workerOutcome(ctx, wid, out)
 	if reason != "" {
 		log.Printf("orchestrator: run %s task %s blocked: %s", r.ID, t.ID, reason)
 	}
@@ -241,6 +241,31 @@ func (o *Orchestrator) recordWorkerEvent(ctx context.Context, runID, workerID st
 	}); err != nil {
 		log.Printf("orchestrator: run %s task %s record %s event: %v", runID, t.ID, kind, err)
 	}
+}
+
+// workerOutcome determines a worker's terminal status, preferring its
+// MCP-reported outcome (recorded as worker_report_* events by the daemon) and
+// falling back to the stdout NDJSON the test shim emits when no MCP report
+// exists. `done` still requires exit 0 (the spec done-predicate).
+func (o *Orchestrator) workerOutcome(ctx context.Context, wid string, out supervisor.Outcome) (status taskStatus, summary, reason string) {
+	if ev, err := o.cfg.Store.LatestWorkerEventByKind(ctx, wid, "worker_report_blocked"); err == nil {
+		var p struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal([]byte(ev.PayloadJSON), &p)
+		return statusFailed, "", p.Reason // blocked wins; not retryable
+	}
+	if ev, err := o.cfg.Store.LatestWorkerEventByKind(ctx, wid, "worker_report_done"); err == nil {
+		var p struct {
+			Summary string `json:"summary"`
+		}
+		_ = json.Unmarshal([]byte(ev.PayloadJSON), &p)
+		if out.ExitCode == 0 {
+			return statusDone, p.Summary, ""
+		}
+		return statusFailed, "", ""
+	}
+	return interpretWorkerOutcome(out)
 }
 
 // interpretWorkerOutcome maps a supervisor Outcome to a terminal status plus a

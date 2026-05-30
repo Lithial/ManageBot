@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -26,6 +27,33 @@ func logPlannerStderrTail(runID string, out supervisor.Outcome) {
 		tail = tail[len(tail)-maxStderrTail:]
 	}
 	log.Printf("orchestrator: run %s planner stderr (tail): %s", runID, tail)
+}
+
+// plannerPlan reads the reported plan, preferring the MCP worker_report_plan
+// event and falling back to the stdout NDJSON the test shim emits.
+func (o *Orchestrator) plannerPlan(ctx context.Context, plannerWID string, out supervisor.Outcome) (planMD, tasksJSON string, ok bool) {
+	if ev, err := o.cfg.Store.LatestWorkerEventByKind(ctx, plannerWID, "worker_report_plan"); err == nil {
+		var p struct {
+			PlanMD    string `json:"plan_md"`
+			TasksJSON string `json:"tasks_json"`
+		}
+		if json.Unmarshal([]byte(ev.PayloadJSON), &p) == nil && (p.PlanMD != "" || p.TasksJSON != "") {
+			return p.PlanMD, p.TasksJSON, true
+		}
+	}
+	// Fallback: last valid report_plan on stdout (revisions supersede).
+	var planMsg *workerrpc.PlanParams
+	for _, m := range out.Messages {
+		if m.Method == workerrpc.MethodReportPlan {
+			if p, perr := workerrpc.AsPlan(m); perr == nil {
+				planMsg = &p
+			}
+		}
+	}
+	if planMsg != nil {
+		return planMsg.PlanMD, planMsg.TasksJSON, true
+	}
+	return "", "", false
 }
 
 // drivePlanner advances a single run pending → planning → (plan_gate | failed).
@@ -62,8 +90,18 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 		_ = o.wt.Remove(context.Background(), proj.RepoPath, wt.Path)
 	}()
 
+	// Give the planner a worker row so it can report its plan over MCP, scoped
+	// by this id.
+	plannerWID, err := o.cfg.Store.InsertWorker(ctx, store.Worker{
+		RunID: r.ID, TaskID: taskIDPlanner, Branch: wt.Branch, WorktreePath: wt.Path,
+	})
+	if err != nil {
+		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
+		return fmt.Errorf("insert planner worker: %w", err)
+	}
+
 	// Spawn the planner.
-	cmd := o.cfg.PlannerCmd(r.SpecMD)
+	cmd := o.cfg.PlannerCmd(plannerWID)
 	cmd.Dir = wt.Path
 
 	stepCtx := ctx
@@ -78,23 +116,9 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 	})
 	if err != nil {
 		logPlannerStderrTail(r.ID, out)
+		_ = o.cfg.Store.FinishWorker(ctx, plannerWID, string(fsm.PhaseFailed), out.ExitCode)
 		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
 		return fmt.Errorf("supervise planner: %w", err)
-	}
-
-	// Find the plan message. Take the last valid one; if the planner emits
-	// multiple report_plan messages, treat each as a revision superseding
-	// the previous. Malformed plan messages are silently skipped so a
-	// trailing valid one still wins.
-	var planMsg *workerrpc.PlanParams
-	for _, m := range out.Messages {
-		if m.Method == workerrpc.MethodReportPlan {
-			p, perr := workerrpc.AsPlan(m)
-			if perr != nil {
-				continue
-			}
-			planMsg = &p
-		}
 	}
 
 	// Always surface protocol/wait diagnostics; failure paths log stderr too.
@@ -105,17 +129,26 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 		log.Printf("orchestrator: run %s planner wait error: %v", r.ID, out.WaitErr)
 	}
 
-	if out.ExitCode != 0 || planMsg == nil {
+	// Prefer the MCP-reported plan (worker_report_plan event); fall back to the
+	// stdout NDJSON the shim emits.
+	planMD, tasksJSON, hasPlan := o.plannerPlan(ctx, plannerWID, out)
+	plannerStatus := statusFailed
+	if hasPlan && out.ExitCode == 0 {
+		plannerStatus = statusDone
+	}
+	_ = o.cfg.Store.FinishWorker(ctx, plannerWID, string(plannerStatus), out.ExitCode)
+
+	if out.ExitCode != 0 || !hasPlan {
 		logPlannerStderrTail(r.ID, out)
 		nextPhase, _ := fsm.Advance(fsm.PhasePlanning, fsm.EventPlanFailed)
 		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(nextPhase))
-		return fmt.Errorf("planner failed: exit=%d hasPlan=%v", out.ExitCode, planMsg != nil)
+		return fmt.Errorf("planner failed: exit=%d hasPlan=%v", out.ExitCode, hasPlan)
 	}
 
 	if _, err := o.cfg.Store.InsertPlan(ctx, store.Plan{
 		RunID:     r.ID,
-		PlanMD:    planMsg.PlanMD,
-		TasksJSON: planMsg.TasksJSON,
+		PlanMD:    planMD,
+		TasksJSON: tasksJSON,
 	}); err != nil {
 		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
 		return fmt.Errorf("insert plan: %w", err)

@@ -57,8 +57,17 @@ func (o *Orchestrator) driveMerger(ctx context.Context, r store.Run) error {
 		return o.failMerge(ctx, r.ID)
 	}
 
+	// Give the merger a worker row so it can report done over MCP, scoped by id.
+	mergerWID, err := o.cfg.Store.InsertWorker(ctx, store.Worker{
+		RunID: r.ID, TaskID: taskIDMerger, Branch: branch, WorktreePath: wt.Path,
+	})
+	if err != nil {
+		log.Printf("orchestrator: run %s insert merger worker: %v", r.ID, err)
+		return o.failMerge(ctx, r.ID)
+	}
+
 	mergeContext := buildMergeContext(survivors, proj.VerificationCommand)
-	cmd := o.cfg.MergerCmd(mergeContext)
+	cmd := o.cfg.MergerCmd(mergerWID)
 	cmd.Dir = wt.Path
 
 	// Run-scoped context so `wrap kill` can stop the merger promptly.
@@ -81,6 +90,7 @@ func (o *Orchestrator) driveMerger(ctx context.Context, r store.Run) error {
 	}
 	if err != nil {
 		log.Printf("orchestrator: run %s supervise merger: %v", r.ID, err)
+		_ = o.cfg.Store.FinishWorker(ctx, mergerWID, string(statusFailed), out.ExitCode)
 		return o.failMerge(ctx, r.ID)
 	}
 	if out.MalformedLines > 0 {
@@ -88,7 +98,8 @@ func (o *Orchestrator) driveMerger(ctx context.Context, r store.Run) error {
 	}
 
 	// The merger reports done the same way a worker does (report_done + exit 0).
-	status, summary, _ := interpretWorkerOutcome(out)
+	status, summary, _ := o.workerOutcome(ctx, mergerWID, out)
+	_ = o.cfg.Store.FinishWorker(ctx, mergerWID, string(status), out.ExitCode)
 	if status != statusDone {
 		logPlannerStderrTail(r.ID, out)
 		return o.failMerge(ctx, r.ID)
@@ -149,7 +160,8 @@ func (o *Orchestrator) survivingBranches(ctx context.Context, runID string) ([]m
 	}
 	var out []mergeInput
 	for _, w := range workers {
-		if w.Status != string(statusDone) {
+		// Only real task-workers are merge inputs — not the planner/merger rows.
+		if w.Status != string(statusDone) || w.TaskID == taskIDPlanner || w.TaskID == taskIDMerger {
 			continue
 		}
 		out = append(out, mergeInput{Branch: w.Branch, TaskID: w.TaskID, Summary: summaries[w.ID]})
