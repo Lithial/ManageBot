@@ -68,6 +68,39 @@ func (s *Store) FinishWorker(ctx context.Context, id, status string, exitCode in
 	return nil
 }
 
+// ListRunningWorkers returns every worker row still in status 'running' across
+// all runs — used by daemon-restart reconciliation to find orphans.
+func (s *Store) ListRunningWorkers(ctx context.Context) ([]Worker, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, run_id, task_id, branch, worktree_path, pid, status, exit_code, started_at, ended_at
+		FROM workers WHERE status = 'running' ORDER BY rowid ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list running workers: %w", err)
+	}
+	defer rows.Close()
+	var out []Worker
+	for rows.Next() {
+		var w Worker
+		var pid, exitCode, startedAt, endedAt sql.NullInt64
+		if err := rows.Scan(&w.ID, &w.RunID, &w.TaskID, &w.Branch, &w.WorktreePath, &pid, &w.Status, &exitCode, &startedAt, &endedAt); err != nil {
+			return nil, fmt.Errorf("scan worker: %w", err)
+		}
+		w.PID = pid.Int64
+		w.StartedAt = startedAt.Int64
+		w.EndedAt = endedAt.Int64
+		if exitCode.Valid {
+			v := exitCode.Int64
+			w.ExitCode = &v
+		}
+		out = append(out, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows err: %w", err)
+	}
+	return out, nil
+}
+
 // ListWorkersByRun returns all worker rows for a run, ordered by started_at
 // ascending (insertion order).
 func (s *Store) ListWorkersByRun(ctx context.Context, runID string) ([]Worker, error) {
