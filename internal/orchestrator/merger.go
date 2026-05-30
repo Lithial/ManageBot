@@ -93,6 +93,12 @@ func (o *Orchestrator) driveMerger(ctx context.Context, r store.Run) error {
 		log.Printf("orchestrator: run %s record merge_done: %v", r.ID, err)
 	}
 
+	// Open the merge gate before advancing, so phase==merge_gate always has the
+	// gate present (no observable window).
+	if err := o.openGate(ctx, r, "merge"); err != nil {
+		log.Printf("orchestrator: run %s open merge gate: %v", r.ID, err)
+		return o.failMerge(ctx, r.ID)
+	}
 	next, err := fsm.Advance(fsm.PhaseMerging, fsm.EventMergeDone)
 	if err != nil {
 		return fmt.Errorf("fsm merge_done: %w", err)

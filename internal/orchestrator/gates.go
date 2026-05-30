@@ -55,6 +55,21 @@ func (o *Orchestrator) driveMergeGate(ctx context.Context, r store.Run) error {
 	}
 }
 
+// openGate creates the gate for a phase a run is about to ENTER, so that by the
+// time the run's phase reads plan_gate/merge_gate the gate already exists (no
+// observable window where the phase has advanced but the gate is missing —
+// mirroring the plan-before-phase invariant). Idempotent via ensureGate.
+func (o *Orchestrator) openGate(ctx context.Context, r store.Run, kind string) error {
+	pol, err := gates.Parse(r.GatesJSON)
+	if err != nil {
+		return fmt.Errorf("parse gates_json: %w", err)
+	}
+	if _, err := o.ensureGate(ctx, r.ID, kind, pol); err != nil {
+		return err
+	}
+	return nil
+}
+
 // evaluateGate parses the run's gate policy and ensures a gate of `kind` exists,
 // returning its resolution (approved | pending | rejected). A malformed
 // gates_json is unrecoverable, so the run is failed.
