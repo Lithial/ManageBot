@@ -13,7 +13,11 @@ type Store struct {
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)", path)
+	// busy_timeout makes a writer wait for the lock rather than failing
+	// immediately with SQLITE_BUSY: the daemon's orchestrator goroutine and the
+	// API handlers both write (e.g. a gate resolution racing an orchestrator
+	// tick), and WAL permits only one writer at a time.
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("sql.Open: %w", err)
