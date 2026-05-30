@@ -49,6 +49,7 @@ func main() {
 	mergerCmd := flag.String("merger-cmd", "claude", "executable to spawn as the merger (Phase 4: bare path; future phases add args)")
 	mergerEnvFlag := flag.String("merger-env", "", "comma-separated KEY=VAL pairs to add to the merger's environment (test helper)")
 	maxWorkers := flag.Int("max-workers", 4, "max simultaneous worker subprocesses per run")
+	retryBudget := flag.Int("worker-retry-budget", 1, "extra attempts a retryable worker failure (crash/timeout) gets")
 	tickInterval := flag.Duration("tick-interval", 500*time.Millisecond, "orchestrator poll interval")
 	stepTimeout := flag.Duration("step-timeout", 5*time.Minute, "per-step timeout for a planner/worker subprocess (kill budget)")
 	flag.Parse()
@@ -105,10 +106,17 @@ func main() {
 			return c
 		},
 		MaxWorkers:  *maxWorkers,
+		RetryBudget: *retryBudget,
 		StepTimeout: *stepTimeout,
 	})
+	// Recover any runs/workers left mid-flight by a previous process before the
+	// tick loop resumes the survivors.
+	if err := orch.Reconcile(context.Background()); err != nil {
+		log.Printf("wrapd: reconcile on startup: %v", err)
+	}
 	orchCtx, orchCancel := context.WithCancel(context.Background())
 	go orch.Run(orchCtx, *tickInterval)
+	go orch.WatchKills(orchCtx, *tickInterval)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

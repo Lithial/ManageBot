@@ -90,12 +90,18 @@ func (s *Store) LatestGateByKind(ctx context.Context, runID, kind string) (Gate,
 	return g, nil
 }
 
-// ResolveGate sets a gate's terminal status, resolver, and resolved_at.
-// Returns ErrNotFound if no gate with that id exists.
+// ErrGateNotPending is returned by ResolveGate when the gate exists but has
+// already been resolved — the optimistic-lock signal for concurrent resolution.
+var ErrGateNotPending = errors.New("gate not pending")
+
+// ResolveGate atomically sets a still-pending gate's status, resolver, and
+// resolved_at. The `status='pending'` guard makes concurrent resolution safe:
+// the first writer wins, a later one gets ErrGateNotPending. Returns ErrNotFound
+// if no gate with that id exists at all.
 func (s *Store) ResolveGate(ctx context.Context, id, status, resolvedBy string) error {
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE gates SET status = ?, resolved_by = ?, resolved_at = ? WHERE id = ?
+		UPDATE gates SET status = ?, resolved_by = ?, resolved_at = ? WHERE id = ? AND status = 'pending'
 	`, status, resolvedBy, now, id)
 	if err != nil {
 		return fmt.Errorf("resolve gate: %w", err)
@@ -105,7 +111,16 @@ func (s *Store) ResolveGate(ctx context.Context, id, status, resolvedBy string) 
 		return fmt.Errorf("resolve gate rows: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("resolve gate %q: %w", id, ErrNotFound)
+		// Classify: missing id vs already-resolved.
+		var cur string
+		switch err := s.db.QueryRowContext(ctx, `SELECT status FROM gates WHERE id = ?`, id).Scan(&cur); {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("resolve gate %q: %w", id, ErrNotFound)
+		case err != nil:
+			return fmt.Errorf("resolve gate %q classify: %w", id, err)
+		default:
+			return fmt.Errorf("resolve gate %q (status=%s): %w", id, cur, ErrGateNotPending)
+		}
 	}
 	return nil
 }

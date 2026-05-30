@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/Lithial/ManageBot/internal/fsm"
 	"github.com/Lithial/ManageBot/internal/intake"
 	"github.com/Lithial/ManageBot/internal/store"
 )
@@ -18,6 +19,50 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /runs/{id}", s.handleGetRun)
 	mux.HandleFunc("POST /runs/{id}/approve", s.handleResolveGate("approved"))
 	mux.HandleFunc("POST /runs/{id}/reject", s.handleResolveGate("rejected"))
+	mux.HandleFunc("POST /runs/{id}/kill", s.handleKill)
+}
+
+// handleKill moves a run to the terminal `killed` phase and rejects any pending
+// gate. The orchestrator's kill watcher cancels in-flight subprocesses; this
+// handler only writes state.
+func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx := r.Context()
+	run, err := s.store.GetRun(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	phase, err := fsm.ParsePhase(run.Phase)
+	if err != nil {
+		log.Printf("api: kill parse phase: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	// Kill is invalid from a terminal phase.
+	if _, err := fsm.Advance(phase, fsm.EventKill); err != nil {
+		writeError(w, http.StatusConflict, "run is already terminal")
+		return
+	}
+	if err := s.store.UpdateRunPhase(ctx, id, string(fsm.PhaseKilled)); err != nil {
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	// Reject any pending gate so it doesn't linger awaiting a decision.
+	if g, err := s.store.PendingGateByRun(ctx, id); err == nil {
+		if err := s.store.ResolveGate(ctx, g.ID, "rejected", "killed_by_user"); err != nil && !errors.Is(err, store.ErrGateNotPending) {
+			log.Printf("api: kill reject gate: %v", err)
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		log.Printf("api: kill pending gate: %v", err)
+	}
+	writeJSON(w, http.StatusOK, intake.KillResponse{RunID: id, Phase: string(fsm.PhaseKilled)})
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -180,6 +225,11 @@ func (s *Server) handleResolveGate(status string) http.HandlerFunc {
 			return
 		}
 		if err := s.store.ResolveGate(ctx, gate.ID, status, by); err != nil {
+			if errors.Is(err, store.ErrGateNotPending) {
+				// Lost the race to a concurrent resolution.
+				writeError(w, http.StatusConflict, "gate already resolved")
+				return
+			}
 			log.Printf("api: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return

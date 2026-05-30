@@ -240,6 +240,50 @@ func TestGetRun_exposesIntake(t *testing.T) {
 	}
 }
 
+func TestKill_parkedRunKilledAndGateRejected(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "plan_gate"})
+	gid, _ := st.InsertGate(ctx, store.Gate{RunID: rid, Kind: "plan", PayloadJSON: "{}"})
+
+	resp, err := c.Post("http://wrap/runs/"+rid+"/kill", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d: %s", resp.StatusCode, raw)
+	}
+	if run, _ := st.GetRun(ctx, rid); run.Phase != "killed" {
+		t.Errorf("phase = %q, want killed", run.Phase)
+	}
+	g, _ := st.LatestGateByKind(ctx, rid, "plan")
+	if g.ID != gid || g.Status != "rejected" || g.ResolvedBy != "killed_by_user" {
+		t.Errorf("gate after kill = %+v, want rejected by killed_by_user", g)
+	}
+}
+
+func TestKill_terminalRunConflicts(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "cli", SpecMD: "s", GatesJSON: "{}", Phase: "done"})
+
+	resp, err := c.Post("http://wrap/runs/"+rid+"/kill", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (run already terminal)", resp.StatusCode)
+	}
+}
+
 func TestGetRun_notFound(t *testing.T) {
 	sock := testutil.StartInProcessServer(t)
 	c := newSocketClient(sock)

@@ -72,6 +72,27 @@ func TestResolveGate(t *testing.T) {
 	}
 }
 
+func TestResolveGate_alreadyResolvedConflicts(t *testing.T) {
+	ctx := context.Background()
+	s := openTempStore(t)
+	rid := seedRun(t, s)
+	gid, _ := s.InsertGate(ctx, store.Gate{RunID: rid, Kind: "plan", PayloadJSON: "{}"})
+
+	if err := s.ResolveGate(ctx, gid, "approved", "first"); err != nil {
+		t.Fatalf("first resolve: %v", err)
+	}
+	// A second resolution of the same gate must conflict, not silently overwrite.
+	err := s.ResolveGate(ctx, gid, "rejected", "second")
+	if !errors.Is(err, store.ErrGateNotPending) {
+		t.Fatalf("second resolve err = %v, want ErrGateNotPending", err)
+	}
+	// The first decision stands.
+	g, _ := s.LatestGateByKind(ctx, rid, "plan")
+	if g.Status != "approved" || g.ResolvedBy != "first" {
+		t.Errorf("gate = %+v, want first approval preserved", g)
+	}
+}
+
 func TestResolveGate_unknown(t *testing.T) {
 	ctx := context.Background()
 	s := openTempStore(t)
