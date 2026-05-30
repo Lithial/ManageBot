@@ -23,11 +23,27 @@ import (
 // program path, env, and args.
 type PlannerCmdFunc func(specMD string) *exec.Cmd
 
+// WorkerCmdFunc returns a freshly-configured *exec.Cmd for one worker
+// subprocess. It is called once per task; the task description is passed in so
+// callers can wire it into the command if they don't want it on stdin. Phase 3
+// production wiring passes the task description on stdin.
+type WorkerCmdFunc func(taskDescription string) *exec.Cmd
+
 type Config struct {
 	Store       *store.Store
 	StateDir    string         // root for worktrees (e.g. ~/.wrap)
 	PlannerCmd  PlannerCmdFunc // factory for the planner subprocess
-	StepTimeout time.Duration  // per-step timeout for planner subprocess
+	WorkerCmd   WorkerCmdFunc  // factory for worker subprocesses (Phase 3)
+	StepTimeout time.Duration  // per-step timeout for a planner/worker subprocess
+
+	// MaxWorkers caps simultaneous worker subprocesses per run (default 4).
+	MaxWorkers int
+
+	// AutoAdvanceGates drives plan_gate runs straight into the working phase
+	// without human approval. Phase 3 scaffold: there is no gate engine yet
+	// (Phase 5), so this crude boolean stands in for gates.plan.mode == "auto".
+	// Default false keeps runs resting at plan_gate, matching Phase 2.
+	AutoAdvanceGates bool
 }
 
 type Orchestrator struct {
@@ -53,6 +69,20 @@ func (o *Orchestrator) Tick(ctx context.Context) error {
 	for _, r := range pending {
 		if err := o.drivePlanner(ctx, r); err != nil {
 			log.Printf("orchestrator: run %s planner: %v", r.ID, err)
+		}
+	}
+
+	// plan_gate → working → (merging | failed). Phase 3 auto-advances the plan
+	// gate only when configured to; Phase 5 replaces this with the gate engine.
+	if o.cfg.AutoAdvanceGates {
+		gated, err := o.cfg.Store.ListRunsByPhase(ctx, string(fsm.PhasePlanGate))
+		if err != nil {
+			return fmt.Errorf("list plan_gate: %w", err)
+		}
+		for _, r := range gated {
+			if err := o.driveWorkers(ctx, r); err != nil {
+				log.Printf("orchestrator: run %s workers: %v", r.ID, err)
+			}
 		}
 	}
 	return nil
