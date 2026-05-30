@@ -10,6 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Status:** Phase 1 (skeleton) is merged. The full design lives in `docs/superpowers/specs/2026-05-26-claude-swarm-wrapper-design.md`; each phase gets its own plan under `docs/superpowers/plans/`. Read the spec before extending architecture; read the relevant phase plan before starting implementation work.
 
+Phase 2 (FSM + planner phase) is on branch `phase-2-fsm-and-planner`: introduces `internal/fsm` (pure phase transitions), `internal/worktree` (git plumbing), `internal/workerrpc` (NDJSON protocol mirroring the planned MCP tool surface), `internal/supervisor` (one-shot subprocess + RPC collection), and `internal/orchestrator` (polling loop that drives `pending → planning → plan_gate`). The planner subprocess is configurable via `wrapd --planner-cmd`; integration tests point it at `fake-claude` with `--planner-env FAKE_CLAUDE_SCRIPT=...` and `--tick-interval 100ms`.
+
 ## Commands
 
 ```bash
@@ -65,6 +67,10 @@ The two helpers are intentionally distinct; don't unify them.
 - **Default gates JSON** is embedded as a literal in `api/handlers.go` (`findOrCreateProject`). When the gate engine lands, that literal should move into a typed config.
 - **`fake-claude`** is env-driven (`FAKE_CLAUDE_EXIT_CODE`, `FAKE_CLAUDE_SLEEP_MS`, `FAKE_CLAUDE_STDOUT`, `FAKE_CLAUDE_STDERR`). Later phases will extend it to emit scripted MCP tool calls — keep it env-driven, no flags.
 - **`--planner-env` values cannot contain commas.** The wrapd flag parses comma-separated `K=V` pairs; values with commas will be silently truncated. If future test fixtures need comma-bearing env values, switch the flag to a repeated `--planner-env` pattern.
+- **Worker-RPC over NDJSON, not real MCP yet.** `internal/workerrpc` uses method names (`report_progress`, `report_plan`, `report_done`, `report_blocked`) chosen to match the eventual MCP tool surface. When real MCP lands (Phase 9), swap the transport, keep the method names. `DecodeAll` returns a `malformed` count — non-zero means a worker protocol bug; the orchestrator logs it.
+- **`--planner-cmd` is bare path only in Phase 2.** No args support. Phase 9 will introduce a richer template with `--mcp wrap --append-system-prompt <planner.md>` args.
+- **Process-group kill for worker subprocesses.** `internal/supervisor` sets `SysProcAttr.Setpgid = true` and kills via `syscall.Kill(-pid, SIGKILL)` so shell-wrapper grandchildren don't leak pipe handles. POSIX-only; the project intentionally has no Windows target.
+- **Orchestrator writes plan BEFORE phase update.** In `drivePlanner`, `InsertPlan` runs before `UpdateRunPhase("plan_gate")`. Polling clients that condition on `phase == plan_gate` can rely on `plan_md` being present — there is no observable window where the phase has advanced but the plan is missing.
 
 ### Adapter-pattern intake
 
