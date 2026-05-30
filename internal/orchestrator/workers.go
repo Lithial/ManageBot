@@ -66,11 +66,10 @@ func (o *Orchestrator) driveWorkers(ctx context.Context, r store.Run) error {
 	defer func() { o.kills.deregister(r.ID); cancel() }()
 
 	// `git worktree add` takes repo-wide ref/index locks; serialize the (quick)
-	// plumbing so parallel workers don't collide. The subprocesses themselves
-	// still run concurrently.
-	var wtMu sync.Mutex
+	// plumbing via the orchestrator-wide mutex (shared with prune) so parallel
+	// workers don't collide. The subprocesses themselves still run concurrently.
 	run := func(ctx context.Context, t Task) taskStatus {
-		return o.runWorker(ctx, r, proj, t, &wtMu)
+		return o.runWorker(ctx, r, proj, t, &o.wtMu)
 	}
 	results := schedule(runCtx, tasks, maxWorkers, run)
 

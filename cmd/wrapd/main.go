@@ -121,6 +121,9 @@ func main() {
 		RetryBudget: *retryBudget,
 		StepTimeout: *stepTimeout,
 	})
+	// The orchestrator owns the worktree manager + serialization mutex, so it is
+	// the Pruner the API's POST /runs/{id}/prune delegates to.
+	srv.SetPruner(orch)
 	// Recover any runs/workers left mid-flight by a previous process before the
 	// tick loop resumes the survivors.
 	if err := orch.Reconcile(context.Background()); err != nil {

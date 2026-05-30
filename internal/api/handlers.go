@@ -24,6 +24,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /runs/{id}/reject", s.handleResolveGate("rejected"))
 	mux.HandleFunc("POST /runs/{id}/resolve", s.handleResolveDecision)
 	mux.HandleFunc("POST /runs/{id}/kill", s.handleKill)
+	mux.HandleFunc("POST /runs/{id}/prune", s.handlePrune)
 	s.registerWorkerRoutes(mux)
 }
 
@@ -68,6 +69,33 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
 		log.Printf("api: kill pending gate: %v", err)
 	}
 	writeJSON(w, http.StatusOK, intake.KillResponse{RunID: id, Phase: string(fsm.PhaseKilled)})
+}
+
+// handlePrune destructively cleans up a terminal run's git worktrees and
+// branches, delegating the plumbing to the injected Pruner (the orchestrator).
+// The guard cases map to HTTP status: unknown run → 404, non-terminal → 409.
+func (s *Server) handlePrune(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.pruner == nil {
+		writeError(w, http.StatusServiceUnavailable, "prune not available")
+		return
+	}
+	wtCount, brCount, err := s.pruner.PruneRun(r.Context(), id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	case errors.Is(err, store.ErrRunNotTerminal):
+		writeError(w, http.StatusConflict, "run is not terminal; only done/failed/killed runs can be pruned")
+		return
+	case err != nil:
+		log.Printf("api: prune run %s: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, intake.PruneRunResponse{
+		RunID: id, WorktreesRemoved: wtCount, BranchesDeleted: brCount,
+	})
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
