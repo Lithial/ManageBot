@@ -89,6 +89,12 @@ func (o *Orchestrator) Tick(ctx context.Context) error {
 	if err := o.driveByPhase(ctx, fsm.PhasePlanGate, o.drivePlanGate); err != nil {
 		return err
 	}
+	// A run normally races plan_gate → working → merging within a single tick,
+	// so it never rests at `working` between ticks — except after a daemon crash,
+	// when Reconcile leaves the run at `working` for resumeWorkers to pick up.
+	if err := o.driveByPhase(ctx, fsm.PhaseWorking, o.resumeWorkers); err != nil {
+		return err
+	}
 	// Merging is automatic work, not a gate; driveMerger self-guards when no
 	// MergerCmd is configured (the run rests at merging).
 	if err := o.driveByPhase(ctx, fsm.PhaseMerging, o.driveMerger); err != nil {

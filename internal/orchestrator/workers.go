@@ -31,19 +31,9 @@ func (o *Orchestrator) driveWorkers(ctx context.Context, r store.Run) error {
 		return fmt.Errorf("AutoAdvanceGates set but WorkerCmd is nil")
 	}
 
-	proj, err := o.cfg.Store.GetProject(ctx, r.ProjectID)
+	proj, tasks, err := o.loadWorkerPhase(ctx, r)
 	if err != nil {
-		return fmt.Errorf("get project: %w", err)
-	}
-	plan, err := o.cfg.Store.GetPlanByRun(ctx, r.ID)
-	if err != nil {
-		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
-		return fmt.Errorf("get plan: %w", err)
-	}
-	tasks, err := parseTasks(plan.TasksJSON)
-	if err != nil {
-		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
-		return fmt.Errorf("parse tasks: %w", err)
+		return err
 	}
 
 	// Advance plan_gate → working.
@@ -55,6 +45,78 @@ func (o *Orchestrator) driveWorkers(ctx context.Context, r store.Run) error {
 		return fmt.Errorf("update run phase working: %w", err)
 	}
 
+	return o.runWorkerPhase(ctx, r, proj, tasks, nil)
+}
+
+// resumeWorkers re-drives a run already in `working` after a daemon restart.
+// Reconcile leaves such runs in `working` (rather than failing them); this
+// re-enters the scheduler with tasks that already produced a worker_done event
+// pre-seeded as done, so completed work is not repeated and only the unfinished
+// (incl. crash-orphaned) tasks are re-dispatched. It then advances working →
+// merging | failed exactly like the fresh path. A no-op when no WorkerCmd is
+// configured (the run rests at working) or the run was killed.
+func (o *Orchestrator) resumeWorkers(ctx context.Context, r store.Run) error {
+	if o.cfg.WorkerCmd == nil || o.isKilled(ctx, r.ID) {
+		return nil
+	}
+	proj, tasks, err := o.loadWorkerPhase(ctx, r)
+	if err != nil {
+		return err
+	}
+	seed, err := o.completedTasks(ctx, r.ID)
+	if err != nil {
+		return fmt.Errorf("derive completed tasks: %w", err)
+	}
+	return o.runWorkerPhase(ctx, r, proj, tasks, seed)
+}
+
+// loadWorkerPhase fetches the project and parsed task DAG for a run, failing the
+// run on an unrecoverable plan/tasks error (matching the fresh-path semantics).
+func (o *Orchestrator) loadWorkerPhase(ctx context.Context, r store.Run) (store.Project, []Task, error) {
+	proj, err := o.cfg.Store.GetProject(ctx, r.ProjectID)
+	if err != nil {
+		return store.Project{}, nil, fmt.Errorf("get project: %w", err)
+	}
+	plan, err := o.cfg.Store.GetPlanByRun(ctx, r.ID)
+	if err != nil {
+		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
+		return store.Project{}, nil, fmt.Errorf("get plan: %w", err)
+	}
+	tasks, err := parseTasks(plan.TasksJSON)
+	if err != nil {
+		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
+		return store.Project{}, nil, fmt.Errorf("parse tasks: %w", err)
+	}
+	return proj, tasks, nil
+}
+
+// completedTasks derives the set of tasks already finished (status done) from a
+// run's worker_done events — the seed for crash-resume scheduling. Reading the
+// event log (not live process state) is what makes resume safe across a restart.
+func (o *Orchestrator) completedTasks(ctx context.Context, runID string) (map[string]taskStatus, error) {
+	events, err := o.cfg.Store.ListEventsByRun(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list events: %w", err)
+	}
+	done := make(map[string]taskStatus)
+	for _, e := range events {
+		if e.Kind != "worker_done" {
+			continue
+		}
+		var p struct {
+			TaskID string `json:"task_id"`
+		}
+		if json.Unmarshal([]byte(e.PayloadJSON), &p) == nil && p.TaskID != "" {
+			done[p.TaskID] = statusDone
+		}
+	}
+	return done, nil
+}
+
+// runWorkerPhase schedules the run's tasks (seed pre-completes resume tasks),
+// then advances working → merging | failed. Shared by the fresh (driveWorkers)
+// and resume (resumeWorkers) paths.
+func (o *Orchestrator) runWorkerPhase(ctx context.Context, r store.Run, proj store.Project, tasks []Task, seed map[string]taskStatus) error {
 	maxWorkers := o.cfg.MaxWorkers
 	if maxWorkers < 1 {
 		maxWorkers = defaultMaxWorkers
@@ -72,7 +134,7 @@ func (o *Orchestrator) driveWorkers(ctx context.Context, r store.Run) error {
 	run := func(ctx context.Context, t Task) taskStatus {
 		return o.runWorker(ctx, r, proj, t, &wtMu)
 	}
-	results := schedule(runCtx, tasks, maxWorkers, run)
+	results := scheduleFrom(runCtx, tasks, maxWorkers, run, seed)
 
 	// If the run was killed mid-work, leave the terminal `killed` phase alone.
 	if o.isKilled(ctx, r.ID) {

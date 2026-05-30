@@ -96,6 +96,35 @@ func TestSchedule_failurePropagatesToDependents(t *testing.T) {
 	}
 }
 
+func TestScheduleFrom_seededTaskIsNotReRunAndUnblocksDependents(t *testing.T) {
+	// Crash-resume shape: a (done) is pre-seeded; b depends on a and must run
+	// (a's seeded status unblocks it); c is independent and runs. a must NOT run.
+	tasks := []Task{
+		{ID: "a"},
+		{ID: "b", DependsOn: []string{"a"}},
+		{ID: "c"},
+	}
+	var ran sync.Map
+	run := func(_ context.Context, t Task) taskStatus {
+		ran.Store(t.ID, true)
+		return statusDone
+	}
+
+	got := scheduleFrom(context.Background(), tasks, 4, run, map[string]taskStatus{"a": statusDone})
+
+	for _, id := range []string{"a", "b", "c"} {
+		if got[id] != statusDone {
+			t.Errorf("status[%s] = %q, want done", id, got[id])
+		}
+	}
+	if _, ok := ran.Load("a"); ok {
+		t.Error("a was run, but it was seeded as already-done — it should be skipped")
+	}
+	if _, ok := ran.Load("b"); !ok {
+		t.Error("b was not run, but its only dependency was seeded done — it should run")
+	}
+}
+
 func TestSchedule_transitiveFailure(t *testing.T) {
 	// a fails -> b (dep a) skipped -> c (dep b) skipped.
 	tasks := []Task{
