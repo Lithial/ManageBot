@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 
 	"github.com/Lithial/ManageBot/internal/fsm"
@@ -11,6 +12,25 @@ import (
 	"github.com/Lithial/ManageBot/internal/workerrpc"
 	"github.com/Lithial/ManageBot/internal/worktree"
 )
+
+// logPlannerOutput emits diagnostic lines for a failed planner outcome.
+// stderr can be large; we log a bounded tail.
+func logPlannerOutput(runID string, out supervisor.Outcome) {
+	if len(out.Stderr) > 0 {
+		tail := out.Stderr
+		const max = 2048
+		if len(tail) > max {
+			tail = tail[len(tail)-max:]
+		}
+		log.Printf("orchestrator: run %s planner stderr (tail): %s", runID, tail)
+	}
+	if out.MalformedLines > 0 {
+		log.Printf("orchestrator: run %s planner emitted %d malformed lines (protocol bug)", runID, out.MalformedLines)
+	}
+	if out.WaitErr != nil {
+		log.Printf("orchestrator: run %s planner wait error: %v", runID, out.WaitErr)
+	}
+}
 
 // drivePlanner advances a single run pending → planning → (plan_gate | failed).
 // It is best-effort idempotent: if the worktree already exists from a prior
@@ -61,11 +81,15 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 		StdinPayload: []byte(r.SpecMD),
 	})
 	if err != nil {
+		logPlannerOutput(r.ID, out)
 		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
 		return fmt.Errorf("supervise planner: %w", err)
 	}
 
-	// Find the plan message.
+	// Find the plan message. Take the last valid one; if the planner emits
+	// multiple report_plan messages, treat each as a revision superseding
+	// the previous. Malformed plan messages are silently skipped so a
+	// trailing valid one still wins.
 	var planMsg *workerrpc.PlanParams
 	for _, m := range out.Messages {
 		if m.Method == workerrpc.MethodReportPlan {
@@ -77,7 +101,23 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 		}
 	}
 
+	// Always surface protocol/wait diagnostics; failure paths log stderr too.
+	if out.MalformedLines > 0 {
+		log.Printf("orchestrator: run %s planner emitted %d malformed lines (protocol bug)", r.ID, out.MalformedLines)
+	}
+	if out.WaitErr != nil {
+		log.Printf("orchestrator: run %s planner wait error: %v", r.ID, out.WaitErr)
+	}
+
 	if out.ExitCode != 0 || planMsg == nil {
+		if len(out.Stderr) > 0 {
+			tail := out.Stderr
+			const max = 2048
+			if len(tail) > max {
+				tail = tail[len(tail)-max:]
+			}
+			log.Printf("orchestrator: run %s planner stderr (tail): %s", r.ID, tail)
+		}
 		nextPhase, _ := fsm.Advance(fsm.PhasePlanning, fsm.EventPlanFailed)
 		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(nextPhase))
 		return fmt.Errorf("planner failed: exit=%d hasPlan=%v", out.ExitCode, planMsg != nil)
@@ -88,6 +128,7 @@ func (o *Orchestrator) drivePlanner(ctx context.Context, r store.Run) error {
 		PlanMD:    planMsg.PlanMD,
 		TasksJSON: planMsg.TasksJSON,
 	}); err != nil {
+		_ = o.cfg.Store.UpdateRunPhase(ctx, r.ID, string(fsm.PhaseFailed))
 		return fmt.Errorf("insert plan: %w", err)
 	}
 	nextPhase, _ := fsm.Advance(fsm.PhasePlanning, fsm.EventPlanDone)
