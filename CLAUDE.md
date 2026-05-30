@@ -64,6 +64,7 @@ The two helpers are intentionally distinct; don't unify them.
 - **`api.Server.Ready() <-chan struct{}`** — fires once the Unix socket is bound. `wrapd`'s startup banner waits on this so "listening on..." only prints when the socket is actually accept-ready. Preserve this when adding startup work.
 - **Default gates JSON** is embedded as a literal in `api/handlers.go` (`findOrCreateProject`). When the gate engine lands, that literal should move into a typed config.
 - **`fake-claude`** is env-driven (`FAKE_CLAUDE_EXIT_CODE`, `FAKE_CLAUDE_SLEEP_MS`, `FAKE_CLAUDE_STDOUT`, `FAKE_CLAUDE_STDERR`). Later phases will extend it to emit scripted MCP tool calls — keep it env-driven, no flags.
+- **`--planner-env` values cannot contain commas.** The wrapd flag parses comma-separated `K=V` pairs; values with commas will be silently truncated. If future test fixtures need comma-bearing env values, switch the flag to a repeated `--planner-env` pattern.
 
 ### Adapter-pattern intake
 

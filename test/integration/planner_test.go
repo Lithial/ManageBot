@@ -5,6 +5,7 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -49,37 +50,14 @@ func TestPlannerHappyPath(t *testing.T) {
 	}
 
 	// Start wrapd with planner-cmd=fake-claude and FAKE_CLAUDE_SCRIPT in its planner env.
-	stateDir := t.TempDir()
-	sock := filepath.Join(t.TempDir(), "wrap.sock")
-	cmd := exec.Command(wrapdBin,
-		"--state-dir", stateDir,
-		"--socket", sock,
+	d := testutil.StartTestDaemon(t, wrapdBin,
 		"--planner-cmd", fakeClaude,
 		"--planner-env", "FAKE_CLAUDE_SCRIPT="+scriptPath,
 		"--tick-interval", "100ms",
 	)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start wrapd: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Signal(os.Interrupt)
-		done := make(chan struct{})
-		go func() { _, _ = cmd.Process.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			_ = cmd.Process.Kill()
-			<-done
-		}
-	})
-
-	// Wait for socket.
-	waitForSocket(t, sock, 3*time.Second)
 
 	// Submit run via the wrap CLI.
-	out, err := exec.Command(wrapBin, "run", "--socket", sock, "--repo", repo, specPath).CombinedOutput()
+	out, err := exec.Command(wrapBin, "run", "--socket", d.SocketPath, "--repo", repo, specPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("wrap run: %v\noutput: %s", err, out)
 	}
@@ -89,7 +67,7 @@ func TestPlannerHappyPath(t *testing.T) {
 	}
 
 	// Poll GET /runs/{id} until phase == plan_gate or timeout.
-	httpc := socketHTTPClient(sock)
+	httpc := socketHTTPClient(d.SocketPath)
 	deadline := time.Now().Add(15 * time.Second)
 	var got intake.GetRunResponse
 	for time.Now().Before(deadline) {
@@ -97,7 +75,15 @@ func TestPlannerHappyPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get run: %v", err)
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&got)
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("GET /runs/%s: status %d, body: %s", submit.RunID, resp.StatusCode, body)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			resp.Body.Close()
+			t.Fatalf("decode get-run response: %v", err)
+		}
 		resp.Body.Close()
 		if got.Phase == "plan_gate" {
 			break
@@ -116,20 +102,6 @@ func TestPlannerHappyPath(t *testing.T) {
 	if !strings.Contains(got.TasksJSON, `"id":"t1"`) {
 		t.Errorf("TasksJSON = %q, want to contain task t1", got.TasksJSON)
 	}
-}
-
-func waitForSocket(t *testing.T, sock string, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("unix", sock, 100*time.Millisecond)
-		if err == nil {
-			_ = c.Close()
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("socket %s never came up", sock)
 }
 
 func socketHTTPClient(sock string) *http.Client {
