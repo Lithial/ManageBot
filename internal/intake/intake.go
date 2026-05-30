@@ -30,6 +30,8 @@ type GetRunResponse struct {
 	RunID        string `json:"run_id"`
 	ProjectID    string `json:"project_id"`
 	Phase        string `json:"phase"`
+	IntakeKind   string `json:"intake_kind"`          // "cli" | "specfile" | "github"
+	IntakeRef    string `json:"intake_ref,omitempty"` // spec path / issue URL — used by `wrap emit`
 	PlanMD       string `json:"plan_md,omitempty"`
 	TasksJSON    string `json:"tasks_json,omitempty"`
 	MergeBranch  string `json:"merge_branch,omitempty"`  // set once the merger has produced a branch

@@ -217,6 +217,29 @@ func TestListRuns(t *testing.T) {
 	}
 }
 
+func TestGetRun_exposesIntake(t *testing.T) {
+	sock, st := testutil.StartInProcessServerWithStore(t)
+	c := newSocketClient(sock)
+	ctx := context.Background()
+
+	pid, _ := st.InsertProject(ctx, store.Project{Name: "p", RepoPath: "/tmp/x", DefaultGatesJSON: "{}"})
+	rid, _ := st.InsertRun(ctx, store.Run{ProjectID: pid, IntakeKind: "specfile", IntakeRef: "/specs/a.md", SpecMD: "s", GatesJSON: "{}", Phase: "done"})
+
+	resp, err := c.Get("http://wrap/runs/" + rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got intake.GetRunResponse
+	_ = json.NewDecoder(resp.Body).Decode(&got)
+	if got.IntakeKind != "specfile" {
+		t.Errorf("IntakeKind = %q, want specfile", got.IntakeKind)
+	}
+	if got.IntakeRef != "/specs/a.md" {
+		t.Errorf("IntakeRef = %q, want /specs/a.md", got.IntakeRef)
+	}
+}
+
 func TestGetRun_notFound(t *testing.T) {
 	sock := testutil.StartInProcessServer(t)
 	c := newSocketClient(sock)

@@ -20,6 +20,8 @@ Phase 5 (gate engine + plan/merge gates) is on branch `phase-5-gate-engine` (bui
 
 Phase 6 (TUI) is on branch `phase-6-tui` (built atop phase 5): a Bubble Tea terminal UI over the existing API — **no new daemon/orchestrator logic**. New pieces: `internal/tui` (a `Model` with `modeList`/`modeDetail`, poll-based via `tea.Tick`, talking to a `tui.DaemonClient` interface that `*client.Client` satisfies), one new read endpoint `GET /runs` (+ `store.ListRuns`, `client.ListRuns`, `intake.RunSummary`/`ListRunsResponse`), and `wrap tui` (dashboard) / `wrap attach <run-id>` (detail) commands. Gate approval reuses Phase 5's `approve`/`reject`. Adds `charmbracelet/bubbletea` + `lipgloss` deps. See `docs/superpowers/plans/2026-06-02-phase-6-tui.md`.
 
+Phase 7 (GitHub + specfile intake adapters + pull emission) is on branch `phase-7-intake-adapters` (built atop phase 6): two new adapters plus a pull-based emission command — **no new orchestration**. New pieces: `internal/intake/specfile.go` (`wrap submit <spec.md>`: `---` frontmatter for `project`/`repo`/`verification_command`, body is the spec; `intake_kind=specfile`), `internal/intake/github.go` (`wrap github <issue-ref>`: an `IssueFetcher` turns a GitHub issue into a run; `intake_kind=github`), and `internal/intake/emit.go` (`wrap emit <run-id>`: dispatch by `intake_kind` — cli→print branch, specfile→write `<spec>.DONE` sidecar, github→`git push` + `gh pr create`). `GET /runs/{id}` now exposes `intake_kind`/`intake_ref` so `emit` knows what to do. The spec's long-poll auto-dispatch emission is **deferred**; `wrap emit` is the (spec-sanctioned) manual trigger. See `docs/superpowers/plans/2026-06-03-phase-7-intake-adapters.md`.
+
 ## Commands
 
 ```bash
@@ -97,7 +99,12 @@ The two helpers are intentionally distinct; don't unify them.
 
 ### Adapter-pattern intake
 
-CLI is the only adapter today (`intake/cli.go`). Specfile and GitHub adapters are planned. All adapters produce a `SubmitRunRequest` and call `RunSubmitter.SubmitRun`. When adding an adapter, do not bypass the API by talking to the store directly — go through the socket like every other client.
+Three intake adapters live in `internal/intake/`: `cli.go` (`wrap run`), `specfile.go` (`wrap submit`, frontmatter-aware), `github.go` (`wrap github`, issue→run). All produce a `SubmitRunRequest` and call `RunSubmitter.SubmitRun` — do not bypass the API by talking to the store directly; go through the socket like every other client.
+
+- **Adapter logic stays pure/interface-driven in `intake`; `cmd/wrap` wires the subprocess impls.** `GitHubAdapter` depends on an `IssueFetcher` interface and emission depends on `intake.EmitDeps` (sidecar writer, push+PR func); the real `gh issue view` / `git push` + `gh pr create` impls live in `cmd/wrap/adapters.go`. Tests use fakes — no network, no `gh` required.
+- **GitHub uses the `gh` CLI**, not a Go GitHub library (reuses the user's auth, zero new deps).
+- **Specfile frontmatter is minimal flat `key: value`** between leading `---` fences (no YAML dep); unknown keys ignored; no frontmatter ⇒ whole file is the spec body.
+- **Emission is pull-based** (`wrap emit <run-id>`), dispatched by `intake_kind` read from `GET /runs/{id}`. The run must be `done`. The spec's long-poll server-push auto-dispatch is deferred; `emit` is the manual trigger.
 
 ### What is NOT in scope (per spec)
 

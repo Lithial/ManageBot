@@ -33,7 +33,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: wrap <command> [args...]\ncommands: run, approve, reject, tui, attach")
+		return errors.New("usage: wrap <command> [args...]\ncommands: run, submit, github, emit, approve, reject, tui, attach")
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -47,6 +47,12 @@ func run(args []string) error {
 		return cmdTUI(rest)
 	case "attach":
 		return cmdAttach(rest)
+	case "submit":
+		return cmdSubmit(rest)
+	case "github":
+		return cmdGitHub(rest)
+	case "emit":
+		return cmdEmit(rest)
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
