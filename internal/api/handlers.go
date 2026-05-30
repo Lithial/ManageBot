@@ -14,6 +14,7 @@ import (
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("POST /runs", s.handleSubmitRun)
+	mux.HandleFunc("GET /runs/{id}", s.handleGetRun)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -71,6 +72,34 @@ func (s *Server) handleSubmitRun(w http.ResponseWriter, r *http.Request) {
 		ProjectID: pid,
 		Phase:     "pending",
 	})
+}
+
+func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx := r.Context()
+	run, err := s.store.GetRun(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	out := intake.GetRunResponse{
+		RunID:     run.ID,
+		ProjectID: run.ProjectID,
+		Phase:     run.Phase,
+	}
+	plan, err := s.store.GetPlanByRun(ctx, id)
+	if err == nil {
+		out.PlanMD = plan.PlanMD
+		out.TasksJSON = plan.TasksJSON
+	} else if !errors.Is(err, store.ErrNotFound) {
+		log.Printf("api: get plan: %v", err)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) findOrCreateProject(ctx context.Context, req intake.SubmitRunRequest) (string, error) {

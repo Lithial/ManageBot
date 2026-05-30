@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,10 @@ type Client struct {
 	http       *http.Client
 	socketPath string
 }
+
+// ErrNotFound is returned by GetRun (and future read methods) when the
+// server responds 404. Callers should use errors.Is(err, client.ErrNotFound).
+var ErrNotFound = errors.New("not found")
 
 func New(socketPath string) *Client {
 	return &Client{
@@ -42,6 +47,27 @@ func (c *Client) Healthz(ctx context.Context) error {
 		return fmt.Errorf("healthz: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func (c *Client) GetRun(ctx context.Context, id string) (intake.GetRunResponse, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://wrap/runs/"+id, nil)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return intake.GetRunResponse{}, fmt.Errorf("get run: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return intake.GetRunResponse{}, fmt.Errorf("run %q: %w", id, ErrNotFound)
+	}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return intake.GetRunResponse{}, fmt.Errorf("get run: status %d: %s", resp.StatusCode, raw)
+	}
+	var out intake.GetRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return intake.GetRunResponse{}, fmt.Errorf("decode response: %w", err)
+	}
+	return out, nil
 }
 
 func (c *Client) SubmitRun(ctx context.Context, req intake.SubmitRunRequest) (intake.SubmitRunResponse, error) {

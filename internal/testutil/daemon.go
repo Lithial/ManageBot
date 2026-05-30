@@ -19,17 +19,18 @@ type Daemon struct {
 	cmd        *exec.Cmd
 }
 
-// StartTestDaemon spawns the wrapd binary in a temp state dir, waits for the
-// socket to become available, and registers a cleanup that kills the process.
-// `wrapdBinary` should be the absolute path to a built wrapd binary; tests
-// typically pass the result of LocateBinary("wrapd").
-func StartTestDaemon(t *testing.T, wrapdBinary string) *Daemon {
+// StartTestDaemon spawns wrapd against an ephemeral state dir + socket.
+// extraArgs are appended after --state-dir and --socket; pass any combination
+// of --planner-cmd, --planner-env, --tick-interval, --step-timeout, etc.
+func StartTestDaemon(t *testing.T, wrapdBinary string, extraArgs ...string) *Daemon {
 	t.Helper()
 
 	stateDir := t.TempDir()
 	sock := filepath.Join(t.TempDir(), "wrap.sock")
 
-	cmd := exec.Command(wrapdBinary, "--state-dir", stateDir, "--socket", sock)
+	args := []string{"--state-dir", stateDir, "--socket", sock}
+	args = append(args, extraArgs...)
+	cmd := exec.Command(wrapdBinary, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
